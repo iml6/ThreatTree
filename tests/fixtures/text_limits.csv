@@ -1,0 +1,15 @@
+ID,Parent_ID,Type,Title,Description,Potentiality,X,Y
+root,,OR,SYS-COMPROMISE-OF-DOMAIN,"Attacker gains persistent
+control of the Aircraft I
+nformation Services Domai
+n through the maintenance",pIV,,
+a,root,AND,Gateway Firewall Bypass.,"Maintenance Port Exposed.
+Maintenance Port Exposed.
+Maintenance Port Exposed.
+Maintenance Port Exposed.",pIII,,
+b,root,OR,GATEWAY-FIREWALL-BYPASS1,Attacker exploits an unauthenticated maintenance interface on the gateway to load a table,"""1E-2""",,
+c,a,BASIC,INPUT-Malicious Payload1,Stolen Credentials,pV,,
+d,a,BASIC,INPUT-4,Unauthenticated interface,OAL2,,
+e,b,BASIC,WWWWWWWWWWWWWWWWWWWWWWWW,"Short text
+second line",vD,,
+f,b,BASIC,INPUT-6,Plain,pV,,

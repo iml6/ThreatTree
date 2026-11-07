@@ -1,0 +1,2464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Threat Tree Diagrammer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #f8fafc;
+        }
+        .interactive-node {
+            cursor: grab;
+        }
+        .interactive-node:active {
+            cursor: grabbing;
+        }
+        .interactive-node .shape, .interactive-node .gate-shape {
+            transition: stroke-width 0.1s ease;
+        }
+        .interactive-node:hover .shape, .interactive-node:hover .gate-shape {
+            stroke-width: 3px;
+        }
+        #dropOverlay {
+            background-color: rgba(59, 130, 246, 0.9);
+        }
+        :root {
+            --bg-color: #f8fafc;
+            --text-color: #1f2937;
+            --box-fill: white;
+            --title-fill: #f3f4f6;
+            --line-color: #111827;
+            --modal-bg: white;
+            --modal-border: #e5e7eb;
+            --trace-path: #dc2626;
+            --trace-branch: #ea580c;
+        }
+        body.dark-mode {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --box-fill: #1e293b;
+            --title-fill: #334155;
+            --line-color: #94a3b8;
+            --modal-bg: #1e293b;
+            --modal-border: #334155;
+            --trace-path: #f87171;
+            --trace-branch: #fb923c;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        /* Page tabs and the triangles that link between pages */
+        .page-tabs { position: absolute; left: 1rem; bottom: 1rem; right: 1rem; z-index: 50; display: flex; flex-wrap: wrap; gap: 0.25rem; pointer-events: none; }
+        .page-tab {
+            pointer-events: auto;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            border: 1px solid var(--modal-border);
+            border-radius: 0.25rem;
+            background-color: var(--title-fill);
+            color: var(--text-color);
+        }
+        .page-tab-active { background-color: #2563eb; border-color: #2563eb; color: white; }
+        .page-tab-small { background-color: #fef3c7; border-color: #d97706; color: #92400e; }
+        .page-tab-small.page-tab-active { background-color: #d97706; border-color: #d97706; color: white; }
+        .page-hint { align-self: center; margin-left: 0.5rem; font-size: 0.75rem; color: var(--text-color); }
+        .transfer-link { cursor: pointer; }
+        .interactive-node.node-selected .shape { stroke: #2563eb; stroke-width: 3.5; }
+
+        /* Toolbar wraps onto a second row rather than running off a narrow window */
+        .action-bar { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100vw - 2rem); }
+
+        /* Help panel */
+        .help-panel {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 46rem;
+            max-height: 88vh;
+            margin: 0 1rem;
+            overflow: hidden;
+        }
+        .help-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0.5rem 1.5rem 1.5rem; font-size: 0.875rem; line-height: 1.4rem; color: var(--text-color); }
+        .help-body h4 { margin: 1.25rem 0 0.4rem; font-size: 1rem; font-weight: 700; }
+        .help-body p { margin-bottom: 0.5rem; }
+        .help-body ul { margin: 0 0 0.5rem; padding-left: 1.25rem; list-style: disc; }
+        .help-body li { margin-bottom: 0.2rem; }
+        .help-body code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; padding: 0 0.2rem; border-radius: 0.2rem; background-color: var(--title-fill); }
+        .help-body table { width: 100%; margin-bottom: 0.5rem; border-collapse: collapse; }
+        .help-body th, .help-body td { padding: 0.3rem 0.5rem; border: 1px solid var(--modal-border); text-align: left; vertical-align: top; }
+        .help-body th { font-weight: 600; background-color: var(--title-fill); }
+        .help-body td:first-child { white-space: nowrap; }
+
+        /* Attack path tracing, on screen only. Exports stay clean. */
+        .trace-dim { opacity: 0.3; }
+        .connector-line.trace-edge-path { stroke: var(--trace-path); stroke-width: 4; }
+        .connector-line.trace-edge-branch { stroke: var(--trace-branch); stroke-width: 3; stroke-dasharray: 8 4; }
+        .connector-dot.trace-dot-path { fill: var(--trace-path); }
+        .connector-dot.trace-dot-branch { fill: var(--trace-branch); }
+        .interactive-node.trace-node-path .shape,
+        .interactive-node.trace-node-path .gate-shape,
+        .interactive-node.trace-node-path .connector-line { stroke: var(--trace-path); stroke-width: 3.5; }
+        .interactive-node.trace-node-branch .shape,
+        .interactive-node.trace-node-branch .box-stub { stroke: var(--trace-branch); stroke-width: 3; stroke-dasharray: 6 3; }
+
+        /* Interface styles, kept in this file so the tool works offline and loads nothing from outside. */
+
+        /* Resets */
+        *, ::before, ::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: #e5e7eb; }
+        html {
+            line-height: 1.5;
+            -webkit-text-size-adjust: 100%;
+            tab-size: 4;
+            font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            -webkit-tap-highlight-color: transparent;
+        }
+        body { line-height: inherit; }
+        h3 { font-size: inherit; font-weight: inherit; margin: 0; }
+        p { margin: 0; }
+        button, input {
+            font-family: inherit;
+            font-size: 100%;
+            font-weight: inherit;
+            line-height: inherit;
+            letter-spacing: inherit;
+            color: inherit;
+            margin: 0;
+            padding: 0;
+        }
+        button { text-transform: none; -webkit-appearance: button; appearance: button; background-color: transparent; background-image: none; cursor: pointer; }
+        svg { display: block; }
+
+        /* Position and layering */
+        .pointer-events-none { pointer-events: none; }
+        .pointer-events-auto { pointer-events: auto; }
+        .fixed { position: fixed; }
+        .absolute { position: absolute; }
+        .relative { position: relative; }
+        .inset-0 { inset: 0; }
+        .right-4 { right: 1rem; }
+        .top-4 { top: 1rem; }
+        .z-50 { z-index: 50; }
+        .z-\[-1\] { z-index: -1; }
+        .z-40 { z-index: 40; }
+        .z-\[60\] { z-index: 60; }
+
+        /* Layout */
+        .block { display: block; }
+        .flex { display: flex; }
+        .hidden { display: none; }
+        .items-center { align-items: center; }
+        .justify-end { justify-content: flex-end; }
+        .justify-center { justify-content: center; }
+        .justify-between { justify-content: space-between; }
+        .gap-2 { gap: 0.5rem; }
+        .space-x-2 > :not([hidden]) ~ :not([hidden]) { margin-left: 0.5rem; }
+        .overflow-hidden { overflow: hidden; }
+        .overflow-visible { overflow: visible; }
+
+        /* Sizes */
+        .h-1 { height: 0.25rem; }
+        .h-6 { height: 1.5rem; }
+        .h-24 { height: 6rem; }
+        .h-full { height: 100%; }
+        .w-6 { width: 1.5rem; }
+        .w-10 { width: 2.5rem; }
+        .w-24 { width: 6rem; }
+        .w-full { width: 100%; }
+        .max-w-md { max-width: 28rem; }
+        .max-w-sm { max-width: 24rem; }
+
+        /* Spacing */
+        .mx-4 { margin-left: 1rem; margin-right: 1rem; }
+        .mx-auto { margin-left: auto; margin-right: auto; }
+        .mb-1 { margin-bottom: 0.25rem; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .p-2 { padding: 0.5rem; }
+        .p-4 { padding: 1rem; }
+        .p-6 { padding: 1.5rem; }
+        .px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+        .px-4 { padding-left: 1rem; padding-right: 1rem; }
+        .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+        .py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+        .py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+        .py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+
+        /* Borders and shadows */
+        .rounded { border-radius: 0.25rem; }
+        .rounded-lg { border-radius: 0.5rem; }
+        .rounded-xl { border-radius: 0.75rem; }
+        .border { border-width: 1px; }
+        .border-b { border-bottom-width: 1px; }
+        .border-t { border-top-width: 1px; }
+        .border-\[var\(--modal-border\)\] { border-color: var(--modal-border); }
+        .shadow-sm { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+        .shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
+        .shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+
+        /* Backgrounds */
+        .bg-\[var\(--bg-color\)\] { background-color: var(--bg-color); }
+        .bg-\[var\(--modal-bg\)\] { background-color: var(--modal-bg); }
+        .bg-\[var\(--title-fill\)\] { background-color: var(--title-fill); }
+        .bg-blue-600 { background-color: rgb(37 99 235); }
+        .bg-gray-100 { background-color: rgb(243 244 246); }
+        .bg-green-600 { background-color: rgb(22 163 74); }
+        .bg-indigo-600 { background-color: rgb(79 70 229); }
+        .bg-purple-600 { background-color: rgb(147 51 234); }
+        .bg-slate-300 { background-color: rgb(203 213 225); }
+        .bg-slate-500 { background-color: rgb(100 116 139); }
+        .bg-teal-600 { background-color: rgb(13 148 136); }
+        .bg-gray-900.bg-opacity-50 { background-color: rgb(17 24 39 / 0.5); }
+
+        /* Text */
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .whitespace-pre-wrap { white-space: pre-wrap; }
+        .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+        .font-sans { font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"; }
+        .text-xs { font-size: 0.75rem; line-height: 1rem; }
+        .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+        .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+        .text-xl { font-size: 1.25rem; line-height: 1.75rem; }
+        .text-3xl { font-size: 1.875rem; line-height: 2.25rem; }
+        .font-normal { font-weight: 400; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        .uppercase { text-transform: uppercase; }
+        .leading-6 { line-height: 1.5rem; }
+        .tracking-wide { letter-spacing: 0.025em; }
+        .text-\[var\(--text-color\)\] { color: var(--text-color); }
+        .text-blue-500 { color: rgb(59 130 246); }
+        .text-gray-400 { color: rgb(156 163 175); }
+        .text-gray-500 { color: rgb(107 114 128); }
+        .text-gray-800 { color: rgb(31 41 55); }
+        .text-purple-500 { color: rgb(168 85 247); }
+        .text-white { color: rgb(255 255 255); }
+
+        /* Behaviour */
+        .origin-top-left { transform-origin: top left; }
+        .transform { transform: translate(0, 0); }
+        .cursor-move { cursor: move; }
+        .cursor-pointer { cursor: pointer; }
+        .touch-none { touch-action: none; }
+        .appearance-none { -webkit-appearance: none; appearance: none; }
+        .transition-all { transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+        .transition-colors { transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1), text-decoration-color 150ms cubic-bezier(0.4, 0, 0.2, 1), fill 150ms cubic-bezier(0.4, 0, 0.2, 1), stroke 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+        .transition-opacity { transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+
+        /* Hover and focus */
+        .hover\:bg-blue-700:hover { background-color: rgb(29 78 216); }
+        .hover\:bg-gray-200:hover { background-color: rgb(229 231 235); }
+        .hover\:bg-green-700:hover { background-color: rgb(21 128 61); }
+        .hover\:bg-indigo-700:hover { background-color: rgb(67 56 202); }
+        .hover\:bg-purple-700:hover { background-color: rgb(126 34 206); }
+        .hover\:bg-slate-600:hover { background-color: rgb(71 85 105); }
+        .hover\:bg-teal-700:hover { background-color: rgb(15 118 110); }
+        .hover\:text-gray-500:hover { color: rgb(107 114 128); }
+        .focus\:outline-none:focus { outline: 2px solid transparent; outline-offset: 2px; }
+    </style>
+</head>
+<body class="font-sans text-[var(--text-color)] bg-[var(--bg-color)]">
+
+    <!-- Action Bar -->
+    <div class="action-bar absolute top-4 right-4 z-50 flex gap-2 shadow-lg bg-[var(--modal-bg)] p-2 rounded-lg border border-[var(--modal-border)] pointer-events-auto transition-colors">
+        <input type="file" id="fileInput" accept=".csv" class="hidden" onchange="handleFileUpload(event)">
+        <button onclick="toggleTheme()" class="bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Toggle Theme
+        </button>
+        <button onclick="document.getElementById('fileInput').click()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Load CSV
+        </button>
+        <button onclick="exportCSV()" class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Save CSV
+        </button>
+        <div class="flex items-center space-x-2 bg-slate-500 px-3 py-1 rounded transition-colors" title="Zoom Level">
+            <span class="text-white text-xs font-semibold">Zoom</span>
+            <input type="range" id="zoomSlider" min="20" max="300" value="100" class="w-24 h-1 bg-slate-300 rounded-lg appearance-none cursor-pointer">
+            <span id="zoomLabel" class="text-white text-xs font-mono w-10 text-right">100%</span>
+        </div>
+        <button onclick="fitAll()" class="bg-slate-500 hover:bg-slate-600 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Fit All
+        </button>
+        <button onclick="autoArrange()" class="bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Auto-Arrange
+        </button>
+        <button onclick="splitSelectedNode()" title="Click a node, then click here to move everything below it to a new page" class="bg-slate-500 hover:bg-slate-600 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Split Page
+        </button>
+        <button onclick="undoSplit()" title="Merge the current page back into the page it was split from" class="bg-slate-500 hover:bg-slate-600 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Undo Split
+        </button>
+        <button onclick="exportSVG()" class="bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Export SVG
+        </button>
+        <button onclick="exportPNG()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Export PNG
+        </button>
+        <button onclick="openHelp()" class="bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-semibold py-2 px-4 rounded transition-colors">
+            Help
+        </button>
+    </div>
+
+    <!-- Page Tabs -->
+    <div id="pageTabs" class="page-tabs hidden"></div>
+
+    <!-- Drag-and-Drop Hint -->
+    <div id="dropOverlay" class="absolute inset-0 z-40 flex items-center justify-center pointer-events-none transition-opacity">
+        <div class="text-white text-3xl font-bold text-center">
+            <svg class="w-24 h-24 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+            Drag & Drop CSV file here, or click Load CSV<br>
+            <span class="text-xl font-normal mt-2 block">(Requires headers: ID, Parent_ID, Type, Title, Description, Potentiality, X, Y)</span>
+        </div>
+    </div>
+
+    <!-- Fullscreen SVG Canvas Container -->
+    <div id="canvasWrapper" class="w-full h-full overflow-hidden relative bg-[var(--bg-color)] transition-colors">
+        <div id="panContainer" class="w-full h-full cursor-move origin-top-left touch-none">
+            <svg id="diagramCanvas" class="w-full h-full overflow-visible" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+    </div>
+
+    <!-- Floating Modal for Details -->
+    <div id="infoModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-50 transition-opacity">
+        <div class="bg-[var(--modal-bg)] rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden transform transition-all border border-[var(--modal-border)]" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b border-[var(--modal-border)] flex justify-between items-center bg-[var(--title-fill)]">
+                <h3 id="modalTitle" class="text-lg leading-6 font-bold text-[var(--text-color)]"></h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-500 focus:outline-none">
+                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+            <div class="px-6 py-4">
+                <p id="modalType" class="text-xs font-semibold text-blue-500 uppercase tracking-wide mb-2"></p>
+                <p id="modalPotentiality" class="text-xs font-semibold text-purple-500 tracking-wide mb-2 hidden"></p>
+                <p id="modalDesc" class="text-sm font-medium text-[var(--text-color)] mb-4"></p>
+                <div class="bg-[var(--title-fill)] p-4 rounded-lg border border-[var(--modal-border)]">
+                    <p class="text-xs text-gray-500 uppercase font-semibold mb-1">Details</p>
+                    <p id="modalDetails" class="text-sm text-[var(--text-color)] whitespace-pre-wrap"></p>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-[var(--modal-border)] bg-[var(--title-fill)] flex justify-end">
+                <button onclick="closeModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg shadow-sm focus:outline-none transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+        <div class="absolute inset-0 z-[-1]" onclick="closeModal()"></div>
+    </div>
+
+    <!-- Help Panel -->
+    <div id="helpModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-gray-900 bg-opacity-50" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <div class="help-panel bg-[var(--modal-bg)] rounded-xl shadow-2xl border border-[var(--modal-border)]">
+            <div class="px-6 py-4 border-b border-[var(--modal-border)] flex justify-between items-center bg-[var(--title-fill)]">
+                <h3 id="helpTitle" class="text-lg leading-6 font-bold text-[var(--text-color)]">How to use Threat Tree Diagrammer</h3>
+                <button onclick="closeHelp()" aria-label="Close help" class="text-gray-400 hover:text-gray-500 focus:outline-none">
+                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+            <div id="helpBody" class="help-body">
+                <h4>Quick start</h4>
+                <ul>
+                    <li>Drag a CSV file onto the page, or click <b>Load CSV</b>.</li>
+                    <li>Click <b>Auto-Arrange</b> for a tidy layout, then drag nodes to fine-tune it.</li>
+                    <li>If the diagram is too big for one sheet, click a node and then <b>Split Page</b>.</li>
+                    <li>Click <b>Save CSV</b> to keep your work, and <b>Export SVG</b> to get pictures for your document.</li>
+                </ul>
+
+                <h4>Preparing the CSV file</h4>
+                <table>
+                    <tr><th>Column</th><th>What to enter</th></tr>
+                    <tr><td><code>ID</code></td><td>Required. A unique name for the node.</td></tr>
+                    <tr><td><code>Parent_ID</code></td><td>The node's parent. Leave blank for the top node. For up to 3 parents, use quotes: <code>"a, b, c"</code></td></tr>
+                    <tr><td><code>Type</code></td><td>Required. <code>AND</code> or <code>OR</code> for a gate, <code>BASIC</code> for a leaf node.</td></tr>
+                    <tr><td><code>Title</code></td><td>One line, up to 24 characters.</td></tr>
+                    <tr><td><code>Description</code></td><td>Up to 4 lines of 25 characters. Line breaks you type in the cell are kept.</td></tr>
+                    <tr><td><code>Potentiality</code></td><td>Shown just below the title box, at its right edge.</td></tr>
+                    <tr><td><code>X</code>, <code>Y</code></td><td>Position on the Master tab. If every node is blank or 0, the diagram is arranged for you.</td></tr>
+                </table>
+                <p>Files saved after a split also contain <code>Page</code>, <code>Page_X</code>, <code>Page_Y</code>, <code>Split_Page</code>, <code>Split_X</code> and <code>Split_Y</code>. The tool fills these in. If you add a row by hand to a split file, give it a <code>Page</code> value.</p>
+                <p>A file with a problem, such as a duplicate ID, a missing parent or a circular link, won't load. A notice lists what to fix, and any diagram already on screen stays as it was.</p>
+
+                <h4>Moving around</h4>
+                <table>
+                    <tr><th>Action</th><th>What it does</th></tr>
+                    <tr><td>Drag a node</td><td>Moves it. Dashed guides appear when it lines up with another node.</td></tr>
+                    <tr><td>Drag the background</td><td>Pans the view.</td></tr>
+                    <tr><td>Scroll or Zoom slider</td><td>Zooms in and out.</td></tr>
+                    <tr><td><b>Fit All</b></td><td>Fits the current tab in the window.</td></tr>
+                    <tr><td><b>Auto-Arrange</b></td><td>Lays out the current tab again, replacing any positions you set by hand. Press Ctrl+Z to get them back.</td></tr>
+                    <tr><td>Ctrl+Z (⌘Z on a Mac)</td><td>Undoes the last drag, Auto-Arrange, split or Undo Split. Ctrl+Shift+Z (⌘⇧Z) redoes it. Undo history is cleared when you refresh or load a file.</td></tr>
+                    <tr><td>Double-click a node</td><td>Opens its Details window.</td></tr>
+                    <tr><td><b>Toggle Theme</b></td><td>Switches between light and dark on screen.</td></tr>
+                </table>
+
+                <h4>Reading the diagram</h4>
+                <ul>
+                    <li><b>Several parents:</b> a node with more than one parent gets a separate line from each. A parent on the left enters at the top-left, and a parent on the right at the top-right.</li>
+                    <li><b>Dots and crossings:</b> a dot marks a real connection. Lines that cross without a dot aren't connected.</li>
+                    <li><b>Duplicates:</b> nodes with the same Title, Description and Potentiality are duplicates. They share a box colour on screen. Duplicated leaf nodes also share a number in their circle. The match is exact, including capital letters.</li>
+                </ul>
+
+                <h4>Tracing an attack path (Master tab only)</h4>
+                <ul>
+                    <li>Click any node to trace upward from it to the top of the diagram.</li>
+                    <li><b>Solid red</b> is the path. If a node has several parents, all of them are followed.</li>
+                    <li><b>Dashed orange</b> marks the other inputs an AND gate on the path also needs, one level only. An OR gate just passes through.</li>
+                    <li>Everything else fades. To clear the trace, click empty space or press Esc.</li>
+                    <li>Traces are for the screen only and never appear in exports.</li>
+                </ul>
+
+                <h4>Splitting into pages</h4>
+                <ul>
+                    <li>The <b>Master</b> tab always shows the full diagram. Tabs appear at the bottom left.</li>
+                    <li>Click a node, then click <b>Split Page</b>. Everything below it moves to a new page. On a page tab, a click selects the node with a blue outline. On Master, a click also starts a trace.</li>
+                    <li>The first split creates <code>page1</code> (the main diagram) and <code>page2</code> (the branch).</li>
+                    <li>The original node gets a triangle marked with the new page. The node is repeated at the top of the new page, with a triangle linking back. Click a triangle to jump to that page.</li>
+                    <li>If a split isn't possible, a notice explains why. The most common reason is that a node being moved also has a parent that would stay behind.</li>
+                    <li>Each tab has its own layout. A split leaves gaps on the original page, so click <b>Auto-Arrange</b> there to close them.</li>
+                    <li>To reverse a split, open that page's tab and click <b>Undo Split</b>.</li>
+                </ul>
+
+                <h4>Checking printed text size</h4>
+                <ul>
+                    <li>Sizes assume Letter portrait with 1-inch margins. Hover over a tab to see the size in points.</li>
+                    <li>All pages print at one shared size, set by the page that has to shrink the most. A message beside the tabs names that page. Master has its own size.</li>
+                    <li>A tab turns amber when its text would print below 6 pt. Split or narrow that page to raise the size.</li>
+                    <li>As a guide, aim for at most 5 boxes side by side on a page.</li>
+                </ul>
+
+                <h4>Exporting pictures</h4>
+                <ul>
+                    <li><b>Export SVG</b> downloads the Master diagram and every page in one click, from any tab. Your browser may ask for permission to download several files, so choose Allow.</li>
+                    <li><b>Export PNG</b> downloads only the current tab, and its text size may not match the other pages once placed in a document.</li>
+                    <li>Exports always have white boxes and dark lines. Duplicate colours are left out, while leaf numbers and page links are kept.</li>
+                    <li>A small line below each exported diagram identifies it, for example <code>Page 2 of 5 · config.csv · 2026-11-06</code>. It shows the page, the CSV file you loaded and the export date.</li>
+                    <li>SVG export is turned off in dark mode, so switch to light first.</li>
+                    <li>Re-export every page after your last change, and don't resize the pictures in your document, so the text sizes stay matched.</li>
+                </ul>
+
+                <h4>Saving your work</h4>
+                <ul>
+                    <li><b>Save CSV</b> downloads <code>threat_tree_export.csv</code>, with the positions on every tab and all your splits. Your original file isn't changed. Loading the saved file brings it all back.</li>
+                    <li>"Unsaved changes" appears beside the tabs when you've changed the layout or pages since loading or saving.</li>
+                    <li>Refreshing the page keeps your diagram, but <b>closing the tab clears it</b>, and nothing is kept on the computer after that. With unsaved changes, your browser warns you first. It shows the same warning for a refresh, which is safe to accept.</li>
+                    <li>Loading a file replaces the current diagram, and asks first if you have unsaved changes. After editing a CSV in another program, load it again to see the changes.</li>
+                    <li>The tool works offline, and your data never leaves your computer.</li>
+                </ul>
+            </div>
+            <div class="px-6 py-4 border-t border-[var(--modal-border)] bg-[var(--title-fill)] flex justify-end">
+                <button onclick="closeHelp()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg shadow-sm focus:outline-none transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+        <div class="absolute inset-0 z-[-1]" onclick="closeHelp()"></div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-gray-900 bg-opacity-50" role="dialog" aria-modal="true">
+        <div class="bg-[var(--modal-bg)] rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6 border border-[var(--modal-border)]">
+            <h3 class="text-lg font-bold text-[var(--text-color)] mb-2">Unsaved changes</h3>
+            <p id="confirmMessage" class="text-sm text-[var(--text-color)] mb-4"></p>
+            <div class="flex justify-end gap-2">
+                <button id="confirmCancel" onclick="closeConfirm()" class="bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg shadow-sm">
+                    Cancel
+                </button>
+                <button id="confirmYes" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg shadow-sm">
+                    Replace it
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Alert Modal -->
+    <div id="customAlertModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-gray-900 bg-opacity-50 transition-opacity">
+        <div class="bg-[var(--modal-bg)] rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6 border border-[var(--modal-border)]">
+            <h3 class="text-lg font-bold text-[var(--text-color)] mb-2">Notice</h3>
+            <p id="customAlertMessage" class="text-sm text-[var(--text-color)] mb-4"></p>
+            <div class="flex justify-end">
+                <button onclick="document.getElementById('customAlertModal').classList.add('hidden')" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg shadow-sm">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Static Layout Constants (Compact Mode)
+        // Boxes fit a description of 4 lines of 25 characters, and a 1-line title of up to 24 characters.
+        const DESC_W = 150;
+        const TITLE_W = 150;
+        const H_GAP = 15;
+        const DESC_H = 69;
+        const TITLE_H = 30;
+        const LINE_GAP = 10;
+        const GATE_W = 34;
+        const GATE_H = 26;
+        const CIRCLE_R = 12;
+        const MASTER_PAGE = 0;       // The Master tab always shows the full diagram; pages are numbered from 1
+        const V_GAP = 160;
+
+        // Multi-Parent Layout & Routing Constants
+        const MAX_PARENTS = 3;
+        const NODE_SPACING = DESC_W + H_GAP;
+        const LANE_STEP = 12;        // Vertical distance between horizontal connector lanes
+        const LANE_CLEARANCE = 4;    // Spans closer than this go on separate lanes
+        const LONG_EDGE_W = 30;      // Room reserved for a line passing through a row
+        const CHANNEL_MARGIN = 5;    // Minimum distance between a vertical line and a node box
+        const CHANNEL_SPACING = 6;   // Minimum distance between parallel vertical lines
+        const ENTRY_SPACING = 24;    // Minimum distance between lines entering the top of one box
+        const JUNCTION_R = 3;
+        const LAYOUT_SWEEPS = 8;
+        const MAX_ERRORS_SHOWN = 10;
+        const EXPORT_LINE_COLOR = '#111827'; // Near-black, for print and MS Word
+        const DRAG_THRESHOLD = 4;    // Pixels the mouse must move before a press becomes a drag
+        const FIT_MARGIN = 12;       // Fit All: gap kept below the toolbar
+        const FIT_TAB_BAR_H = 56;    // Fit All: room kept for the page tabs
+        const SESSION_KEY = 'threatTreeSession';
+        const HISTORY_LIMIT = 100;   // Undo steps kept
+
+        // Triangles linking a split node between pages
+        const TRANSFER_LABEL_H = 14;
+        const BACK_LINK_W = 24;
+        const BACK_LINK_H = 24;
+        const BACK_LINK_ABOVE_BOX_BOTTOM = 16;
+
+        // Printing on Letter portrait with 1-inch margins. MIN_PRINT_TEXT_PT is the size that triggers a warning.
+        const PRINT_WIDTH_PT = 468;
+        const PRINT_HEIGHT_PT = 648;
+        const NODE_TEXT_SIZE = 11;
+        const MIN_PRINT_TEXT_PT = 6;
+        const EXPORT_MARGIN = 10;
+        const SVG_DOWNLOAD_SPACING_MS = 300;
+
+        // Box colours for groups of duplicated nodes, on screen only. Exports keep every box white.
+        const DUPLICATE_COLORS = [
+            { light: '#fde68a', dark: '#78350f' }, // Amber
+            { light: '#bfdbfe', dark: '#1e40af' }, // Blue
+            { light: '#bbf7d0', dark: '#166534' }, // Green
+            { light: '#fecaca', dark: '#991b1b' }, // Red
+            { light: '#ddd6fe', dark: '#5b21b6' }, // Violet
+            { light: '#a5f3fc', dark: '#155e75' }, // Cyan
+            { light: '#fed7aa', dark: '#9a3412' }, // Orange
+            { light: '#fbcfe8', dark: '#9d174d' }, // Pink
+            { light: '#d9f99d', dark: '#3f6212' }, // Lime
+            { light: '#e7d5c0', dark: '#57534e' }  // Tan
+        ];
+
+        // Node Text Constants (boxes grow from DESC_H / TITLE_H so no text is ever cut off)
+        const NODE_TYPES = ['AND', 'OR', 'BASIC'];
+        // A named font, so text measured here fits the same way on other computers and in Word.
+        const FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+        const TEXT_FONT = `11px ${FONT_FAMILY}`;
+        const POTENTIALITY_FONT = `bold 10px ${FONT_FAMILY}`;
+        const EXPORT_LABEL_FONT_SIZE = 10;
+        const EXPORT_LABEL_H = 14;   // Room for the identifying line below an exported diagram
+        const TEXT_LINE_H = 13.2;
+        const TEXT_PADDING = 5;
+        const DESC_FIRST_BASELINE = 18;
+        const TITLE_FIRST_BASELINE = 19;
+        const TEXT_BOTTOM_SPACE = 11;
+        const MIN_TITLE_FONT_SIZE = 8.5; // A long title shrinks to this size to stay on one line, then wraps
+        const POTENTIALITY_FIRST_BASELINE = 11;
+        const POTENTIALITY_LINE_H = 12;
+
+        const svgns = "http://www.w3.org/2000/svg";
+        const svg = document.getElementById('diagramCanvas');
+
+        // State variables
+        let nodesArray = [];
+        let draggingNode = null;
+        let dragOffset = { x: 0, y: 0 };
+        let dragStart = { x: 0, y: 0 };
+        let isDraggingCanvas = false;
+        let canvasOffset = { x: window.innerWidth / 2, y: 100 }; 
+        let canvasDragStart = { x: 0, y: 0 };
+        let mouseHasMoved = false;
+        let zoomLevel = 1;
+        let activeAlignLines = { x: null, y: null };
+        let loadNotice = '';
+        let tracedNode = null;
+        let selectedNode = null;     // Node clicked on a page tab, ready for Split Page
+        let allNodes = [];           // Every node in the file. nodesArray holds only the current tab's nodes.
+        let currentPage = MASTER_PAGE;
+        let pageViews = new Map();   // Zoom and pan remembered for each page
+        let printSizes = new Map();  // Estimated printed text size, in points, for each page
+        let renderedElements = { edges: [], dots: [], nodes: [] };
+        let undoStack = [];
+        let redoStack = [];
+        let hasUnsavedChanges = false;
+        let sourceFileName = '';     // Name of the loaded CSV, shown on exported diagrams
+
+        // --- Layered DAG Layout ---
+
+        // Parents before children. Nodes on a cycle are left out, so a short result means a cycle exists.
+        function topologicalOrder(nodes) {
+            const pending = new Map(nodes.map(n => [n, 0]));
+            nodes.forEach(n => n.children.forEach(c => pending.set(c, pending.get(c) + 1)));
+            const order = nodes.filter(n => pending.get(n) === 0);
+            for (let i = 0; i < order.length; i++) {
+                order[i].children.forEach(c => {
+                    pending.set(c, pending.get(c) - 1);
+                    if (pending.get(c) === 0) order.push(c);
+                });
+            }
+            return order;
+        }
+
+        // Each node sits one row below its deepest parent. An edge spanning several rows gets a
+        // narrow placeholder in each row it crosses, which reserves room for its line.
+        function buildLayers() {
+            const rank = new Map(nodesArray.map(n => [n, 0]));
+            topologicalOrder(nodesArray).forEach(n => {
+                n.children.forEach(c => rank.set(c, Math.max(rank.get(c), rank.get(n) + 1)));
+            });
+
+            const entries = new Map(nodesArray.map(n => [n, { node: n, rank: rank.get(n), width: NODE_SPACING, ups: [], downs: [] }]));
+            nodesArray.forEach(n => {
+                n.children.forEach(c => {
+                    let prev = entries.get(n);
+                    for (let r = rank.get(n) + 1; r < rank.get(c); r++) {
+                        const placeholder = { node: null, rank: r, width: LONG_EDGE_W, ups: [prev], downs: [] };
+                        prev.downs.push(placeholder);
+                        prev = placeholder;
+                    }
+                    prev.downs.push(entries.get(c));
+                    entries.get(c).ups.push(prev);
+                });
+            });
+
+            // Depth-first starting order keeps each subtree together.
+            const rows = [];
+            const visited = new Set();
+            const visit = (entry) => {
+                if (visited.has(entry)) return;
+                visited.add(entry);
+                (rows[entry.rank] = rows[entry.rank] || []).push(entry);
+                entry.downs.forEach(visit);
+            };
+            nodesArray.forEach(n => { if (entries.get(n).ups.length === 0) visit(entries.get(n)); });
+            return rows;
+        }
+
+        function countCrossings(rows) {
+            let crossings = 0;
+            for (let r = 0; r < rows.length - 1; r++) {
+                const below = new Map(rows[r + 1].map((e, i) => [e, i]));
+                const edges = [];
+                rows[r].forEach((e, i) => e.downs.forEach(d => edges.push([i, below.get(d)])));
+                for (let a = 0; a < edges.length; a++) {
+                    for (let b = a + 1; b < edges.length; b++) {
+                        if ((edges[a][0] - edges[b][0]) * (edges[a][1] - edges[b][1]) < 0) crossings++;
+                    }
+                }
+            }
+            return crossings;
+        }
+
+        // Barycenter sweeps: order each row by the average position of its neighbours, keeping the best result.
+        function reduceCrossings(rows) {
+            const sortRow = (row, reference, neighbours) => {
+                const refPos = new Map(reference.map((e, i) => [e, i]));
+                const weight = new Map(row.map((e, i) => {
+                    const linked = neighbours(e);
+                    return [e, linked.length ? linked.reduce((sum, l) => sum + refPos.get(l), 0) / linked.length : i];
+                }));
+                row.sort((a, b) => weight.get(a) - weight.get(b));
+            };
+
+            let best = rows.map(r => r.slice());
+            let bestCount = countCrossings(rows);
+            for (let sweep = 0; sweep < LAYOUT_SWEEPS && bestCount > 0; sweep++) {
+                if (sweep % 2 === 0) {
+                    for (let r = 1; r < rows.length; r++) sortRow(rows[r], rows[r - 1], e => e.ups);
+                } else {
+                    for (let r = rows.length - 2; r >= 0; r--) sortRow(rows[r], rows[r + 1], e => e.downs);
+                }
+                const count = countCrossings(rows);
+                if (count < bestCount) {
+                    best = rows.map(r => r.slice());
+                    bestCount = count;
+                }
+            }
+            return best;
+        }
+
+        // Moves a row as close as possible to the wanted positions while keeping its order and
+        // minimum spacing (least-squares solution, using pool-adjacent-violators).
+        function placeRow(row, wanted) {
+            const offsets = [0];
+            for (let i = 1; i < row.length; i++) {
+                offsets[i] = offsets[i - 1] + (row[i - 1].width + row[i].width) / 2;
+            }
+            const blocks = [];
+            row.forEach((entry, i) => {
+                let block = { sum: wanted(entry) - offsets[i], count: 1 };
+                while (blocks.length && blocks[blocks.length - 1].sum / blocks[blocks.length - 1].count > block.sum / block.count) {
+                    const prev = blocks.pop();
+                    block = { sum: prev.sum + block.sum, count: prev.count + block.count };
+                }
+                blocks.push(block);
+            });
+            let i = 0;
+            blocks.forEach(block => {
+                for (let k = 0; k < block.count; k++, i++) {
+                    row[i].x = block.sum / block.count + offsets[i];
+                }
+            });
+        }
+
+        function assignRowPositions(rows) {
+            const average = (entry, linked) => linked.length
+                ? linked.reduce((sum, l) => sum + l.x, 0) / linked.length
+                : entry.x;
+            const alignToChildren = () => {
+                for (let r = rows.length - 1; r >= 0; r--) placeRow(rows[r], e => average(e, e.downs));
+            };
+            const alignToParents = () => {
+                for (let r = 0; r < rows.length; r++) placeRow(rows[r], e => average(e, e.ups));
+            };
+
+            rows.forEach(row => row.forEach(e => { e.x = 0; }));
+            for (let sweep = 0; sweep < LAYOUT_SWEEPS; sweep++) {
+                alignToChildren();
+                alignToParents();
+            }
+            alignToChildren(); // Finish here so parents end up centred over their children.
+
+            const topRow = rows[0].filter(e => e.node);
+            const shift = topRow.reduce((sum, e) => sum + e.x, 0) / topRow.length;
+            rows.forEach(row => row.forEach(e => {
+                // Whole pixels, with the inner round removing float noise so aligned nodes stay aligned.
+                if (e.node) e.node.x = Math.round(Math.round((e.x - shift) * 1000) / 1000);
+            }));
+        }
+
+        // --- Connector Routing ---
+
+        // Bottom of the title box, relative to the node's y.
+        function boxesHeight(node) {
+            return node.descH + LINE_GAP + node.titleH;
+        }
+
+        // Room a node needs in its row, allowing for a gate whether or not it has one.
+        function rowSlotHeight(node) {
+            return boxesHeight(node) + Math.max(LINE_GAP + GATE_H, symbolHeight(node), potentialityHeight(node));
+        }
+
+        // Height of what hangs below the title box: a leaf circle, a page-link triangle or a gate.
+        function symbolHeight(node) {
+            if (node.gateType === 'BASIC') return CIRCLE_R * 2;
+            // A gate, or a triangle plus its label when the children are on another page.
+            return LINE_GAP + GATE_H + (isTransferOut(node) ? TRANSFER_LABEL_H : 0);
+        }
+
+        // Lowest point of a node's drawing, including its gate or leaf circle.
+        function nodeBottom(node) {
+            return node.y + boxesHeight(node) + Math.max(symbolHeight(node), potentialityHeight(node));
+        }
+
+        function isColumnClear(x, top, bottom) {
+            return nodesArray.every(n => n.y >= bottom || nodeBottom(n) <= top || Math.abs(x - n.x) >= DESC_W / 2 + CHANNEL_MARGIN);
+        }
+
+        // Nearest x for a vertical run that avoids node boxes and other vertical runs.
+        function findChannel(preferredX, top, bottom, verticals) {
+            const isFree = x => isColumnClear(x, top, bottom)
+                && verticals.every(v => v.bottom <= top || v.top >= bottom || Math.abs(v.x - x) >= CHANNEL_SPACING);
+            const bases = [preferredX];
+            nodesArray.forEach(n => {
+                if (n.y < bottom && nodeBottom(n) > top) {
+                    bases.push(n.x - DESC_W / 2 - H_GAP / 2, n.x + DESC_W / 2 + H_GAP / 2);
+                }
+            });
+            let bestX = preferredX;
+            let bestDistance = Infinity;
+            bases.forEach(base => {
+                [0, 1, -1, 2, -2, 3, -3].forEach(step => {
+                    const x = base + step * CHANNEL_SPACING;
+                    if (Math.abs(x - preferredX) < bestDistance && isFree(x)) {
+                        bestX = x;
+                        bestDistance = Math.abs(x - preferredX);
+                    }
+                });
+            });
+            return bestX;
+        }
+
+        // First-fit: spans that overlap go on different lanes, so no two parents' lines ever run together.
+        function assignLanes(spans, order = (a, b) => a.min - b.min) {
+            const lanes = [];
+            spans.slice().sort(order).forEach(span => {
+                const fits = lane => lane.every(other => other.max + LANE_CLEARANCE < span.min || span.max + LANE_CLEARANCE < other.min);
+                let lane = lanes.findIndex(fits);
+                if (lane === -1) lane = lanes.push([]) - 1;
+                lanes[lane].push(span);
+                span.lane = lane;
+            });
+            return lanes.length;
+        }
+
+        // Crossings between parents' buses: a stem coming down through a higher bus,
+        // or a higher bus's drop to its child going through a lower bus.
+        function countBusCrossings(spans) {
+            const within = (x, span) => x > span.min && x < span.max;
+            let crossings = 0;
+            spans.forEach(upper => spans.forEach(lower => {
+                if (upper.lane >= lower.lane) return;
+                new Set(lower.edges.map(e => e.anchorX)).forEach(x => { if (within(x, upper)) crossings++; });
+                upper.edges.forEach(e => { if (within(e.busEndX, lower)) crossings++; });
+            }));
+            return crossings;
+        }
+
+        // Tries a few stacking orders for the parents' buses and keeps the one with the fewest crossings.
+        function assignBusLanes(spans) {
+            const width = span => span.max - span.min;
+            const orders = [
+                (a, b) => a.min - b.min,
+                (a, b) => b.max - a.max,
+                (a, b) => width(a) - width(b),
+                (a, b) => width(b) - width(a)
+            ];
+            let bestOrder = orders[0];
+            let bestCrossings = Infinity;
+            orders.forEach(order => {
+                assignLanes(spans, order);
+                const crossings = countBusCrossings(spans);
+                if (crossings < bestCrossings) {
+                    bestOrder = order;
+                    bestCrossings = crossings;
+                }
+            });
+            return assignLanes(spans, bestOrder);
+        }
+
+        // Where each edge meets the top of its child. A single parent enters at the centre. Several parents
+        // each get their own point: top-left for a parent to the left, top-right for one to the right,
+        // centre for one roughly overhead, spaced apart in the same left-to-right order as the parents.
+        function assignEntryPoints(edges) {
+            groupBy(edges, e => e.child).forEach((incoming, child) => {
+                if (incoming.length === 1) {
+                    incoming[0].entryX = child.x;
+                    return;
+                }
+                const sideOffset = DESC_W / 4;
+                const slots = incoming
+                    .slice()
+                    .sort((a, b) => a.parent.x - b.parent.x)
+                    .map(edge => ({ edge, width: ENTRY_SPACING }));
+                placeRow(slots, slot => {
+                    const dx = slot.edge.parent.x - child.x;
+                    return Math.abs(dx) <= sideOffset ? 0 : Math.sign(dx) * sideOffset;
+                });
+                slots.forEach(slot => { slot.edge.entryX = child.x + slot.x; });
+            });
+        }
+
+        // Routes every parent-to-child edge from the current node positions, including hand-placed ones.
+        // Returns each edge's points, the junction dots, and how many lanes each gap between rows needs.
+        function computeConnectors() {
+            const edges = [];
+            const verticals = [];
+            const rowHeights = new Map();
+            groupBy(nodesArray, n => n.y).forEach((row, y) => {
+                rowHeights.set(y, Math.max(...row.map(rowSlotHeight)));
+            });
+            nodesArray.forEach(parent => parent.children.forEach(child => {
+                edges.push({ parent, child, top: parent.y + rowHeights.get(parent.y) });
+            }));
+            assignEntryPoints(edges);
+            edges.forEach(edge => {
+                edge.isDirect = edge.child.y >= edge.top && isColumnClear(edge.entryX, edge.top, edge.child.y);
+                edge.busEndX = edge.entryX;
+                if (edge.isDirect) verticals.push({ x: edge.entryX, top: edge.top, bottom: edge.child.y });
+            });
+
+            // Edges blocked by a node drop down a free channel, then step across just above the child.
+            const blockedEdges = edges.filter(e => !e.isDirect);
+            blockedEdges.forEach(edge => {
+                const entryY = edge.child.y - LANE_STEP;
+                const top = Math.min(edge.top, entryY);
+                const bottom = Math.max(edge.top, entryY);
+                edge.busEndX = findChannel(edge.entryX, top, bottom, verticals);
+                verticals.push({ x: edge.busEndX, top, bottom });
+                edge.entrySpan = {
+                    childY: edge.child.y,
+                    min: Math.min(edge.entryX, edge.busEndX),
+                    max: Math.max(edge.entryX, edge.busEndX)
+                };
+            });
+            const entryLaneCount = new Map();
+            groupBy(blockedEdges.map(e => e.entrySpan), s => s.childY).forEach((spans, y) => {
+                entryLaneCount.set(y, assignLanes(spans));
+            });
+
+            // Each parent's bus gets its own lane in the gap below its row.
+            edges.forEach(edge => {
+                const inset = GATE_W / 4; // 25% inset from edge
+                const offset = edge.busEndX - edge.parent.x;
+                edge.anchorX = edge.parent.x + (Math.abs(offset) <= inset ? 0 : Math.sign(offset) * inset);
+                edge.stemY = edge.parent.y + boxesHeight(edge.parent) + LINE_GAP + GATE_H - 6; // Starts just inside the gate
+            });
+            const rowLaneCount = new Map();
+            groupBy(edges, e => e.parent.y).forEach((rowEdges, y) => {
+                const spans = [...groupBy(rowEdges, e => e.parent).values()].map(parentEdges => ({
+                    edges: parentEdges,
+                    min: Math.min(...parentEdges.map(e => Math.min(e.anchorX, e.busEndX))),
+                    max: Math.max(...parentEdges.map(e => Math.max(e.anchorX, e.busEndX)))
+                }));
+                const laneCount = assignBusLanes(spans);
+                rowLaneCount.set(y, laneCount);
+
+                // Share the gap evenly when hand-placed rows leave less room than the lanes would like.
+                const rowBottom = y + rowHeights.get(y);
+                const tops = rowEdges.map(e => e.child.y).filter(childY => childY > rowBottom);
+                let step = LANE_STEP;
+                if (tops.length) {
+                    const nextRowY = Math.min(...tops);
+                    const lanesInGap = laneCount + (entryLaneCount.get(nextRowY) || 0);
+                    step = Math.min(LANE_STEP, (nextRowY - rowBottom) / (lanesInGap + 1));
+                }
+                spans.forEach(span => span.edges.forEach(e => { e.laneY = rowBottom + step * (span.lane + 1); }));
+            });
+
+            const paths = edges.map(edge => {
+                const points = [[edge.anchorX, edge.stemY], [edge.anchorX, edge.laneY], [edge.busEndX, edge.laneY]];
+                if (!edge.isDirect) {
+                    const entryLaneY = edge.child.y - LANE_STEP * (edge.entrySpan.lane + 1);
+                    points.push([edge.busEndX, entryLaneY], [edge.entryX, entryLaneY]);
+                }
+                points.push([edge.entryX, edge.child.y]);
+                return points;
+            });
+
+            // A dot marks a real connection, so lines that merely cross (no dot) can't be misread.
+            const dots = new Map();
+            const addDot = (x, y, busEdges) => dots.set(`${x},${y}`, { x, y, busEdges });
+            groupBy(edges, e => e.parent).forEach(parentEdges => {
+                groupBy(parentEdges, e => e.anchorX).forEach((busEdges, anchorX) => {
+                    const xs = [anchorX, ...busEdges.map(e => e.busEndX)];
+                    const min = Math.min(...xs);
+                    const max = Math.max(...xs);
+                    busEdges.forEach(e => {
+                        if (e.busEndX > min && e.busEndX < max) addDot(e.busEndX, e.laneY, busEdges);
+                    });
+                });
+            });
+
+            return { paths, edges, dots: [...dots.values()], rowLaneCount, entryLaneCount };
+        }
+
+        function groupBy(items, keyOf) {
+            const groups = new Map();
+            items.forEach(item => {
+                const key = keyOf(item);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(item);
+            });
+            return groups;
+        }
+
+        // SVG Drawing Utils
+        function createEl(tag, attributes = {}) {
+            const el = document.createElementNS(svgns, tag);
+            for (const [key, value] of Object.entries(attributes)) {
+                el.setAttribute(key, value);
+            }
+            return el;
+        }
+
+        const textMeasure = document.createElement('canvas').getContext('2d');
+
+        function textWidth(text, font) {
+            textMeasure.font = font;
+            return textMeasure.measureText(text).width;
+        }
+
+        // Splits a word too wide for one line, preferring to break after a hyphen.
+        function breakWord(word, maxWidth, font) {
+            const pieces = [];
+            let rest = word;
+            while (textWidth(rest, font) > maxWidth) {
+                let end = 1;
+                while (end < rest.length && textWidth(rest.slice(0, end + 1), font) <= maxWidth) end++;
+                const hyphen = rest.lastIndexOf('-', end - 1);
+                if (hyphen > 0) end = hyphen + 1;
+                pieces.push(rest.slice(0, end));
+                rest = rest.slice(end);
+            }
+            if (rest) pieces.push(rest);
+            return pieces;
+        }
+
+        function wrapText(text, maxWidth, font) {
+            const lines = [];
+            let line = '';
+            text.split(/\s+/).filter(Boolean).forEach(word => {
+                const candidate = line ? `${line} ${word}` : word;
+                if (textWidth(candidate, font) <= maxWidth) {
+                    line = candidate;
+                    return;
+                }
+                if (line) lines.push(line);
+                const pieces = breakWord(word, maxWidth, font);
+                lines.push(...pieces.slice(0, -1));
+                line = pieces[pieces.length - 1];
+            });
+            if (line) lines.push(line);
+            return lines;
+        }
+
+        // Wraps a node's text and sizes its boxes to fit all of it.
+        function measureNodeText(node) {
+            // Line breaks typed in the CSV cell are kept.
+            node.descLines = node.description.split(/\r?\n/).flatMap(line => wrapText(line, DESC_W - TEXT_PADDING * 2, TEXT_FONT));
+            node.descH = Math.max(DESC_H, DESC_FIRST_BASELINE + (node.descLines.length - 1) * TEXT_LINE_H + TEXT_BOTTOM_SPACE);
+
+            const titleRoom = TITLE_W - TEXT_PADDING * 2;
+            const fittedSize = NODE_TEXT_SIZE * titleRoom / textWidth(node.title, TEXT_FONT);
+            node.titleFontSize = NODE_TEXT_SIZE;
+            if (fittedSize < NODE_TEXT_SIZE && fittedSize >= MIN_TITLE_FONT_SIZE) {
+                node.titleFontSize = Math.floor(fittedSize * 100) / 100;
+                node.titleLines = wrapText(node.title, Infinity, TEXT_FONT);
+            } else {
+                node.titleLines = wrapText(node.title, titleRoom, TEXT_FONT);
+            }
+            node.titleH = Math.max(TITLE_H, TITLE_FIRST_BASELINE + (node.titleLines.length - 1) * TEXT_LINE_H + TEXT_BOTTOM_SPACE);
+
+            // The potentiality sits under the title box's right corner, wrapped to stay clear of the gate or circle.
+            node.potentialityLines = wrapText(node.potentiality, TITLE_W / 2 - GATE_W / 2 - TEXT_PADDING, POTENTIALITY_FONT);
+        }
+
+        function potentialityHeight(node) {
+            return node.potentialityLines.length * POTENTIALITY_LINE_H + 2;
+        }
+
+        // Fill for a node's boxes: its duplicate group's colour, or the normal theme colour.
+        function boxFill(node, normalFill) {
+            if (node.duplicateGroup === null) return normalFill;
+            const color = DUPLICATE_COLORS[node.duplicateGroup % DUPLICATE_COLORS.length];
+            return document.body.classList.contains('dark-mode') ? color.dark : color.light;
+        }
+
+        // Duplicate group number, centred on centerY inside a leaf circle.
+        function createNumberText(number, centerY) {
+            const numberText = createEl('text', {
+                x: 0, y: centerY + 4, 'text-anchor': 'middle', 'font-size': '11', 'font-weight': 'bold',
+                'font-family': FONT_FAMILY, fill: 'var(--text-color)', 'pointer-events': 'none', class: 'duplicate-number'
+            });
+            numberText.textContent = number;
+            return numberText;
+        }
+
+        function renderTextLines(lines, firstBaseline, group, fontSize = NODE_TEXT_SIZE) {
+            lines.forEach((line, i) => {
+                const textEl = createEl('text', {
+                    x: 0, y: firstBaseline + i * TEXT_LINE_H,
+                    'text-anchor': 'middle', 'font-size': fontSize, 'font-family': FONT_FAMILY,
+                    fill: 'var(--text-color)', 'pointer-events': 'none', class: 'node-text'
+                });
+                textEl.textContent = line;
+                group.appendChild(textEl);
+            });
+        }
+
+        // Gates pointing UP
+        function getGatePath(type) {
+            const hw = GATE_W / 2;
+            const h = GATE_H;
+            if (type === 'AND') {
+                return `M -${hw} ${h} L ${hw} ${h} L ${hw} ${h/2} A ${hw} ${h/2} 0 0 0 -${hw} ${h/2} Z`;
+            } else if (type === 'OR') {
+                return `M -${hw} ${h} Q 0 ${h*0.75} ${hw} ${h} Q ${hw} ${h*0.2} 0 0 Q -${hw} ${h*0.2} -${hw} ${h} Z`;
+            }
+            return "";
+        }
+
+        function renderAll() {
+            svg.innerHTML = '';
+            
+            const gCanvas = createEl('g', {
+                transform: `translate(${canvasOffset.x}, ${canvasOffset.y}) scale(${zoomLevel})`
+            });
+            svg.appendChild(gCanvas);
+
+            // 1. Draw Connectors (parent to children)
+            const connectors = computeConnectors();
+            renderedElements = { edges: [], dots: [], nodes: [] };
+            connectors.paths.forEach((points, i) => {
+                const pathData = points.map(([x, y], p) => `${p === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+                const el = createEl('path', {
+                    d: pathData, fill: 'none', stroke: 'var(--line-color)', 'stroke-width': '2', class: 'connector-line'
+                });
+                gCanvas.appendChild(el);
+                renderedElements.edges.push({ el, edge: connectors.edges[i] });
+            });
+            connectors.dots.forEach(dot => {
+                const el = createEl('circle', {
+                    cx: dot.x, cy: dot.y, r: JUNCTION_R, fill: 'var(--line-color)', class: 'connector-dot'
+                });
+                gCanvas.appendChild(el);
+                renderedElements.dots.push({ el, dot });
+            });
+
+            // 2. Draw Nodes
+            nodesArray.forEach(node => {
+                const group = createEl('g', {
+                    class: 'interactive-node', transform: `translate(${node.x}, ${node.y})`
+                });
+
+                group.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    draggingNode = node;
+                    mouseHasMoved = false;
+                    dragStart = { x: e.clientX, y: e.clientY };
+                    const ctm = group.getScreenCTM();
+                    dragOffset.x = (e.clientX - ctm.e) / ctm.a;
+                    dragOffset.y = (e.clientY - ctm.f) / ctm.d;
+                });
+
+                group.addEventListener('dblclick', () => openModal(node));
+
+                let currentY = 0;
+
+                // Description
+                group.appendChild(createEl('rect', {
+                    x: -(DESC_W / 2), y: currentY, width: DESC_W, height: node.descH,
+                    fill: boxFill(node, 'var(--box-fill)'), stroke: 'var(--line-color)', 'stroke-width': '2', rx: '4', class: 'shape node-rect'
+                }));
+                renderTextLines(node.descLines, currentY + DESC_FIRST_BASELINE, group);
+                currentY += node.descH;
+                
+                // Gap
+                group.appendChild(createEl('line', {
+                    x1: 0, y1: currentY, x2: 0, y2: currentY + LINE_GAP,
+                    stroke: 'var(--line-color)', 'stroke-width': '2', class: 'connector-line box-stub'
+                }));
+                currentY += LINE_GAP;
+
+                // Title
+                group.appendChild(createEl('rect', {
+                    x: -(TITLE_W / 2), y: currentY, width: TITLE_W, height: node.titleH,
+                    fill: boxFill(node, 'var(--title-fill)'), stroke: 'var(--line-color)', 'stroke-width': '2', rx: '2', class: 'shape node-rect'
+                }));
+                renderTextLines(node.titleLines, currentY + TITLE_FIRST_BASELINE, group, node.titleFontSize);
+
+                node.potentialityLines.forEach((line, i) => {
+                    const potText = createEl('text', {
+                        x: TITLE_W / 2, y: currentY + node.titleH + POTENTIALITY_FIRST_BASELINE + i * POTENTIALITY_LINE_H,
+                        'text-anchor': 'end', 'font-size': '10', 'font-weight': 'bold',
+                        'font-family': FONT_FAMILY, fill: 'var(--text-color)', 'pointer-events': 'none', class: 'node-potentiality'
+                    });
+                    potText.textContent = line;
+                    group.appendChild(potText);
+                });
+
+                currentY += node.titleH;
+
+                // Gate or Leaf
+                if (node.gateType === 'BASIC') {
+                    group.appendChild(createEl('circle', {
+                        cx: 0, cy: currentY + CIRCLE_R, r: CIRCLE_R,
+                        fill: 'var(--box-fill)', stroke: 'var(--line-color)', 'stroke-width': '2', class: 'gate-shape leaf-circle'
+                    }));
+                    if (node.duplicateNumber !== null) {
+                        group.appendChild(createNumberText(node.duplicateNumber, currentY + CIRCLE_R));
+                    }
+                } else if (isTransferOut(node)) {
+                    group.appendChild(createEl('line', {
+                        x1: 0, y1: currentY, x2: 0, y2: currentY + LINE_GAP,
+                        stroke: 'var(--line-color)', 'stroke-width': '2', class: 'connector-line'
+                    }));
+                    appendPageLink(group, node.splitPage, {
+                        centerX: 0, apexY: currentY + LINE_GAP, width: GATE_W, height: GATE_H,
+                        labelX: 0, labelY: currentY + LINE_GAP + GATE_H + 12, labelAnchor: 'middle'
+                    });
+                } else {
+                    group.appendChild(createEl('line', {
+                        x1: 0, y1: currentY, x2: 0, y2: currentY + LINE_GAP,
+                        stroke: 'var(--line-color)', 'stroke-width': '2', class: 'connector-line'
+                    }));
+                    currentY += LINE_GAP;
+
+                    const symbolGroup = createEl('g', { transform: `translate(0, ${currentY})` });
+
+                    symbolGroup.appendChild(createEl('path', {
+                        d: getGatePath(node.gateType), fill: 'var(--box-fill)', stroke: 'var(--line-color)', 'stroke-width': '2', class: 'gate-shape gate-path'
+                    }));
+                    
+                    const gateText = createEl('text', {
+                        x: 0, y: GATE_H * 0.75, 'text-anchor': 'middle', 'font-size': '9', 'font-weight': 'bold',
+                        'font-family': FONT_FAMILY, fill: 'var(--text-color)', 'pointer-events': 'none', class: 'gate-text'
+                    });
+                    gateText.textContent = node.gateType;
+                    symbolGroup.appendChild(gateText);
+                    group.appendChild(symbolGroup);
+                }
+                // On a split's new page, a triangle on the box's lower-left corner links back to the original node.
+                if (node.splitPage === currentPage) {
+                    const centerX = -DESC_W / 2 - 4;
+                    const apexY = node.descH - BACK_LINK_ABOVE_BOX_BOTTOM;
+                    appendPageLink(group, node.page, {
+                        centerX, apexY, width: BACK_LINK_W, height: BACK_LINK_H,
+                        labelX: -DESC_W / 2 - 3, labelY: apexY + BACK_LINK_H + 12, labelAnchor: 'end'
+                    });
+                }
+
+                gCanvas.appendChild(group);
+                renderedElements.nodes.push({ el: group, node });
+            });
+
+            applyTrace();
+            updateCurrentPrintSize(connectors.paths);
+
+            // Alignment Guides
+            if (activeAlignLines.x !== null) {
+                gCanvas.appendChild(createEl('line', {
+                    x1: activeAlignLines.x, y1: -10000, x2: activeAlignLines.x, y2: 10000,
+                    stroke: 'var(--line-color)', 'stroke-width': '1', 'stroke-dasharray': '5,5', opacity: '0.4', 'pointer-events': 'none'
+                }));
+            }
+            if (activeAlignLines.y !== null) {
+                gCanvas.appendChild(createEl('line', {
+                    x1: -10000, y1: activeAlignLines.y, x2: 10000, y2: activeAlignLines.y,
+                    stroke: 'var(--line-color)', 'stroke-width': '1', 'stroke-dasharray': '5,5', opacity: '0.4', 'pointer-events': 'none'
+                }));
+            }
+        }
+
+        // --- Attack Path Tracing ---
+
+        // Walks from a node up to the root(s) through every parent, never down to its children. An AND gate
+        // needs all its inputs, so its other inputs are marked as a branch, one level only. An OR gate just passes through.
+        function computeTrace(startNode) {
+            const pathNodes = new Set();
+            const pathEdges = new Set();
+            const branchNodes = new Set();
+            const branchEdges = new Set();
+            const edgeKey = (parent, child) => JSON.stringify([parent.id, child.id]);
+
+            const walkUp = (node) => {
+                if (pathNodes.has(node)) return;
+                pathNodes.add(node);
+                node.parents.forEach(parent => {
+                    pathEdges.add(edgeKey(parent, node));
+                    if (parent.gateType === 'AND') {
+                        parent.allChildren.filter(sibling => sibling !== node).forEach(sibling => {
+                            branchNodes.add(sibling);
+                            branchEdges.add(edgeKey(parent, sibling));
+                        });
+                    }
+                    walkUp(parent);
+                });
+            };
+            walkUp(startNode);
+
+            // Anything on the main path stays on the main path.
+            pathNodes.forEach(node => branchNodes.delete(node));
+            pathEdges.forEach(key => branchEdges.delete(key));
+            return { pathNodes, pathEdges, branchNodes, branchEdges, edgeKey };
+        }
+
+        // Updates the existing elements in place. Redrawing would replace the node
+        // under the pointer between the two clicks of a double-click.
+        function applyTrace() {
+            // Tracing belongs to the Master tab; on page tabs a click only selects a node.
+            const trace = tracedNode && currentPage === MASTER_PAGE ? computeTrace(tracedNode) : null;
+            renderedElements.nodes.forEach(({ el, node }) => {
+                el.classList.toggle('node-selected', currentPage !== MASTER_PAGE && node === selectedNode);
+            });
+            const edgeState = (edge) => {
+                if (!trace) return null;
+                const key = trace.edgeKey(edge.parent, edge.child);
+                return trace.pathEdges.has(key) ? 'path' : trace.branchEdges.has(key) ? 'branch' : null;
+            };
+            const setState = (el, prefix, state) => {
+                el.classList.toggle(`${prefix}-path`, state === 'path');
+                el.classList.toggle(`${prefix}-branch`, state === 'branch');
+                el.classList.toggle('trace-dim', Boolean(trace) && !state);
+            };
+
+            const raised = { branch: [], path: [] };
+            renderedElements.edges.forEach(({ el, edge }) => {
+                const state = edgeState(edge);
+                setState(el, 'trace-edge', state);
+                if (state) raised[state].push(el);
+            });
+            renderedElements.dots.forEach(({ el, dot }) => {
+                // A dot takes the highlight of any traced line on its bus that runs through it.
+                const states = dot.busEdges
+                    .filter(e => dot.x >= Math.min(e.anchorX, e.busEndX) && dot.x <= Math.max(e.anchorX, e.busEndX))
+                    .map(edgeState);
+                const state = states.includes('path') ? 'path' : states.includes('branch') ? 'branch' : null;
+                setState(el, 'trace-dot', state);
+                if (state) raised[state].push(el);
+            });
+            renderedElements.nodes.forEach(({ el, node }) => {
+                const state = !trace ? null : trace.pathNodes.has(node) ? 'path' : trace.branchNodes.has(node) ? 'branch' : null;
+                setState(el, 'trace-node', state);
+            });
+
+            // Lift highlighted lines above the others, keeping them below the node boxes.
+            const firstNode = renderedElements.nodes.length > 0 ? renderedElements.nodes[0].el : null;
+            if (firstNode) {
+                [...raised.branch, ...raised.path].forEach(el => firstNode.parentNode.insertBefore(el, firstNode));
+            }
+        }
+
+        function setTracedNode(node) {
+            tracedNode = node;
+            applyTrace();
+        }
+
+        // A plain click: traces on the Master tab, selects on a page tab. Null clears it.
+        function setClickedNode(node) {
+            if (currentPage === MASTER_PAGE) {
+                setTracedNode(node);
+            } else {
+                selectedNode = node;
+                applyTrace();
+            }
+        }
+
+        // --- Undo ---
+
+        // Everything undo can restore: each node's page, split and positions, and which tab was showing.
+        function captureState(page = currentPage) {
+            return {
+                page,
+                nodes: allNodes.map(n => ({
+                    page: n.page,
+                    splitPage: n.splitPage,
+                    positions: {
+                        master: { ...nodePosition(n, 'master') },
+                        home: { ...nodePosition(n, 'home') },
+                        copy: { ...nodePosition(n, 'copy') }
+                    }
+                }))
+            };
+        }
+
+        function restoreState(state) {
+            allNodes.forEach((node, i) => {
+                const saved = state.nodes[i];
+                node.page = saved.page;
+                node.splitPage = saved.splitPage;
+                node.positions = {
+                    master: { ...saved.positions.master },
+                    home: { ...saved.positions.home },
+                    copy: { ...saved.positions.copy }
+                };
+                node.shownPosition = 'master';
+                node.x = saved.positions.master.x;
+                node.y = saved.positions.master.y;
+            });
+            selectedNode = null;
+            const sameTab = currentPage === state.page;
+            if (!sameTab) pageViews = new Map(); // Page numbers may have changed
+            applyPage(state.page);
+            if (sameTab) renderAll();
+            else fitAll();
+            refreshPrintSizes();
+        }
+
+        // Call just before a change, with the tab to return to if that isn't the current one.
+        function recordChange(page = currentPage) {
+            undoStack.push(captureState(page));
+            if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+            redoStack = [];
+            setUnsaved(true);
+        }
+
+        function stepHistory(from, to) {
+            if (from.length === 0) return;
+            to.push(captureState());
+            restoreState(from.pop());
+            setUnsaved(true);
+        }
+
+        function setUnsaved(value) {
+            hasUnsavedChanges = value;
+            updatePageTabs();
+        }
+
+        function isDialogOpen() {
+            return ['infoModal', 'helpModal', 'customAlertModal', 'confirmModal']
+                .some(id => !document.getElementById(id).classList.contains('hidden'));
+        }
+
+        function showConfirm(message, onConfirm) {
+            document.getElementById('confirmMessage').innerText = message;
+            document.getElementById('confirmYes').onclick = () => {
+                closeConfirm();
+                onConfirm();
+            };
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+
+        function closeConfirm() {
+            document.getElementById('confirmModal').classList.add('hidden');
+        }
+
+        // The browser's own warning before leaving the page. It can't tell a refresh from closing the tab.
+        window.addEventListener('beforeunload', (e) => {
+            if (hasUnsavedChanges) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        // --- Pages ---
+
+        // The Master tab shows the full diagram. On the page tabs, a split node appears twice: on its
+        // own page with a triangle in place of its gate, and at the top of the new page with its children.
+        function isTransferOut(node) {
+            return currentPage !== MASTER_PAGE && node.splitPage !== null && node.splitPage !== currentPage;
+        }
+
+        function pageNumbers() {
+            const pages = new Set(allNodes.map(n => n.page));
+            return [...pages].sort((a, b) => a - b);
+        }
+
+        // Until the first split there is only the Master tab.
+        function hasPages() {
+            return pageNumbers().length > 1;
+        }
+
+        function allTabs() {
+            return hasPages() ? [MASTER_PAGE, ...pageNumbers()] : [MASTER_PAGE];
+        }
+
+        function pageName(page) {
+            return page === MASTER_PAGE ? 'Master' : `page${page}`;
+        }
+
+        // A node's position on the Master tab, its own page, or as the copy at the top of a split's new page.
+        function nodePosition(node, key) {
+            return node.shownPosition === key ? { x: node.x, y: node.y } : node.positions[key];
+        }
+
+        function showPosition(node, key) {
+            if (node.shownPosition === key) return;
+            node.positions[node.shownPosition] = { x: node.x, y: node.y };
+            node.shownPosition = key;
+            node.x = node.positions[key].x;
+            node.y = node.positions[key].y;
+        }
+
+        // Shows one tab, swapping each node's position for that tab into x and y.
+        function setCurrentPage(page) {
+            pageViews.set(currentPage, { zoomLevel, canvasOffset: { ...canvasOffset } });
+            applyPage(page);
+            updatePageTabs();
+        }
+
+        function applyPage(page) {
+            currentPage = page;
+            allNodes.forEach(node => {
+                if (page === MASTER_PAGE) {
+                    showPosition(node, 'master');
+                    node.children = node.allChildren;
+                    return;
+                }
+                showPosition(node, node.splitPage === page ? 'copy' : 'home');
+                const childrenAreHere = node.splitPage !== null ? node.splitPage === page : node.page === page;
+                node.children = childrenAreHere ? node.allChildren.filter(c => c.page === page) : [];
+            });
+            nodesArray = page === MASTER_PAGE ? allNodes : allNodes.filter(n => n.page === page || n.splitPage === page);
+        }
+
+        // Exact area the current page's drawing covers, including connectors and the back-link label.
+        function getPageExtents(paths) {
+            const backLinkLeft = (node) => Math.min(
+                -DESC_W / 2 - 4 - BACK_LINK_W / 2,
+                -DESC_W / 2 - 3 - textWidth(`Page ${node.page}`, POTENTIALITY_FONT)
+            );
+            const lefts = nodesArray.map(n => n.x + (n.splitPage === currentPage ? backLinkLeft(n) : -DESC_W / 2));
+            const pathPoints = paths.flat();
+            const xs = pathPoints.map(p => p[0]);
+            const ys = pathPoints.map(p => p[1]);
+            return {
+                minX: Math.min(...lefts, ...xs),
+                maxX: Math.max(...nodesArray.map(n => n.x + DESC_W / 2), ...xs),
+                minY: Math.min(...nodesArray.map(n => n.y), ...ys),
+                maxY: Math.max(...nodesArray.map(nodeBottom), ...ys)
+            };
+        }
+
+        // The line identifying an exported diagram, such as "Page 2 of 5 · config.csv · 2026-11-06".
+        function exportLabel() {
+            const parts = [];
+            if (hasPages()) {
+                parts.push(currentPage === MASTER_PAGE ? 'Master diagram' : `Page ${currentPage} of ${pageNumbers().length}`);
+            }
+            if (sourceFileName) parts.push(sourceFileName);
+            const now = new Date();
+            parts.push([now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-'));
+            return parts.join(' · ');
+        }
+
+        // The whole area of an exported picture: the drawing, its margin and the identifying line.
+        function getExportArea(paths) {
+            const extents = getPageExtents(paths);
+            textMeasure.font = `${EXPORT_LABEL_FONT_SIZE}px ${FONT_FAMILY}`;
+            const labelWidth = textMeasure.measureText(exportLabel()).width;
+            return {
+                ...extents,
+                width: Math.max(extents.maxX - extents.minX, labelWidth) + EXPORT_MARGIN * 2,
+                height: extents.maxY - extents.minY + EXPORT_MARGIN * 2 + EXPORT_LABEL_H
+            };
+        }
+
+        // Node text size in points when the page is scaled to fit the printable area, never enlarged past 1 pt per unit.
+        function printedTextSize(paths) {
+            const { width, height } = getExportArea(paths);
+            return NODE_TEXT_SIZE * Math.min(PRINT_WIDTH_PT / width, PRINT_HEIGHT_PT / height, 1);
+        }
+
+        // All pages share one scale, set by the page that must shrink the most, so their text matches.
+        // The Master tab isn't part of that set and keeps its own scale.
+        function tabPrintSize(page) {
+            if (page === MASTER_PAGE) return printSizes.get(MASTER_PAGE);
+            return Math.min(...pageNumbers().map(p => printSizes.get(p)));
+        }
+
+        // The pages holding the shared text size down.
+        function limitingPages() {
+            const shared = tabPrintSize(pageNumbers()[0]).toFixed(1);
+            return pageNumbers().filter(p => printSizes.get(p).toFixed(1) === shared);
+        }
+
+        function updateCurrentPrintSize(paths) {
+            if (nodesArray.length === 0) return;
+            const size = printedTextSize(paths);
+            const changed = (printSizes.get(currentPage) || 0).toFixed(1) !== size.toFixed(1);
+            printSizes.set(currentPage, size);
+            if (changed) updatePageTabs();
+        }
+
+        function refreshPrintSizes() {
+            const shownPage = currentPage;
+            printSizes = new Map();
+            allTabs().forEach(page => {
+                applyPage(page);
+                printSizes.set(page, printedTextSize(computeConnectors().paths));
+            });
+            applyPage(shownPage);
+            updatePageTabs();
+        }
+
+        // Keeps page numbers consecutive after a page is removed.
+        function renumberPages() {
+            const newNumbers = new Map([[MASTER_PAGE, MASTER_PAGE], ...pageNumbers().map((page, i) => [page, i + 1])]);
+            allNodes.forEach(node => {
+                node.page = newNumbers.get(node.page);
+                if (node.splitPage !== null) node.splitPage = newNumbers.get(node.splitPage);
+            });
+            pageViews = new Map([...pageViews]
+                .filter(([page]) => newNumbers.has(page))
+                .map(([page, view]) => [newNumbers.get(page), view]));
+            currentPage = newNumbers.get(currentPage);
+        }
+
+        function goToPage(page) {
+            selectedNode = null;
+            setCurrentPage(page);
+            const view = pageViews.get(page);
+            if (view) {
+                zoomLevel = view.zoomLevel;
+                canvasOffset = view.canvasOffset;
+                updateZoomControls();
+                renderAll();
+            } else {
+                fitAll();
+            }
+        }
+
+        function updatePageTabs() {
+            const tabs = document.getElementById('pageTabs');
+            const sizesKnown = allTabs().every(page => printSizes.has(page));
+            const belowMinimum = (page) => tabPrintSize(page).toFixed(1) < MIN_PRINT_TEXT_PT;
+            // Once pages exist, the pages are what gets printed: only the ones limiting the size can warn.
+            const limiting = sizesKnown && hasPages() ? limitingPages() : [];
+            const isSmall = (page) => sizesKnown && belowMinimum(page) && (hasPages() ? limiting.includes(page) : true);
+            const tabButtons = allTabs().map(page => {
+                const tab = document.createElement('button');
+                tab.className = 'page-tab' + (page === currentPage ? ' page-tab-active' : '') + (isSmall(page) ? ' page-tab-small' : '');
+                tab.textContent = pageName(page);
+                if (sizesKnown) tab.title = `Text prints at ${tabPrintSize(page).toFixed(1)} pt on Letter portrait with 1-inch margins`;
+                tab.addEventListener('click', () => goToPage(page));
+                return tab;
+            });
+            const hint = document.createElement('span');
+            hint.className = 'page-hint';
+            if (sizesKnown && hasPages() && currentPage !== MASTER_PAGE) {
+                const names = limiting.map(pageName).join(', ');
+                hint.textContent = belowMinimum(currentPage)
+                    ? `All pages print at ${tabPrintSize(currentPage).toFixed(1)} pt, below ${MIN_PRINT_TEXT_PT} pt. Split or narrow ${names} to raise them all.`
+                    : `All pages print at ${tabPrintSize(currentPage).toFixed(1)} pt, set by ${names}.`;
+            } else if (isSmall(currentPage)) {
+                hint.textContent = `Text would print below ${MIN_PRINT_TEXT_PT} pt on Letter portrait. Consider splitting this page.`;
+            }
+            if (hasUnsavedChanges) {
+                hint.textContent = `Unsaved changes. ${hint.textContent}`.trim();
+            }
+            tabs.replaceChildren(...tabButtons, hint);
+            tabs.classList.toggle('hidden', allNodes.length === 0);
+        }
+
+        // An upward-pointing triangle with its "Page N" label. Clicking either one opens that page.
+        function appendPageLink(group, page, { centerX, apexY, width, height, labelX, labelY, labelAnchor }) {
+            const triangle = createEl('path', {
+                d: `M ${centerX} ${apexY} L ${centerX + width / 2} ${apexY + height} L ${centerX - width / 2} ${apexY + height} Z`,
+                fill: 'var(--box-fill)', stroke: 'var(--line-color)', 'stroke-width': '2', class: 'gate-shape transfer-triangle transfer-link'
+            });
+            const label = createEl('text', {
+                x: labelX, y: labelY, 'text-anchor': labelAnchor, 'font-size': '10', 'font-weight': 'bold',
+                'font-family': FONT_FAMILY, fill: 'var(--text-color)', class: 'transfer-label transfer-link'
+            });
+            label.textContent = `Page ${page}`;
+            [triangle, label].forEach(el => {
+                el.addEventListener('mousedown', e => e.stopPropagation()); // Not a node click or drag
+                el.addEventListener('click', () => goToPage(page));
+                group.appendChild(el);
+            });
+        }
+
+        function nodeLabel(node) {
+            return node.title && node.title !== node.id ? `${node.title} (ID ${node.id})` : `"${node.id}"`;
+        }
+
+        // Everything below a node on this page, which is what a split would move.
+        function nodesBelow(node) {
+            const below = new Set();
+            const visit = (n) => n.children.forEach(child => {
+                if (!below.has(child)) {
+                    below.add(child);
+                    visit(child);
+                }
+            });
+            visit(node);
+            return below;
+        }
+
+        // Why a node can't be split, or null if it can.
+        function splitBlockReason(node) {
+            const label = nodeLabel(node);
+            if (isTransferOut(node)) {
+                return `${label} is already split. Its children are on page${node.splitPage}.`;
+            }
+            if (node.children.length === 0) {
+                return `${label} has no children to move to a new page.`;
+            }
+            const below = nodesBelow(node);
+            if (below.size === nodesArray.length - 1) {
+                return `${label} is at the top of this page, so a split would move everything else and leave nothing behind. Choose a node further down.`;
+            }
+            const conflicts = [];
+            below.forEach(moved => {
+                moved.parents.filter(p => p !== node && !below.has(p)).forEach(parent => {
+                    conflicts.push(`${nodeLabel(moved)} also has parent ${nodeLabel(parent)}`);
+                });
+            });
+            if (conflicts.length > 0) {
+                const shown = conflicts.slice(0, MAX_ERRORS_SHOWN);
+                if (conflicts.length > shown.length) shown.push(`...and ${conflicts.length - shown.length} more`);
+                return `${label} can't be split because a connection would have to cross between pages:\n\n${shown.join('\n')}\n\nThose parents would stay on this page while their children move. Choose a node higher up that includes those parents, or one further down that doesn't include those children.`;
+            }
+            return null;
+        }
+
+        function splitSelectedNode() {
+            if (allNodes.length === 0) return;
+            const shownTab = currentPage;
+            const node = shownTab === MASTER_PAGE ? tracedNode : selectedNode;
+            if (!node) {
+                showCustomAlert(`Click a node on ${pageName(shownTab)} first, then click Split Page.`);
+                return;
+            }
+
+            // From the Master tab, the split happens on whichever page holds the node.
+            const isFirstSplit = !hasPages();
+            pageViews.set(shownTab, { zoomLevel, canvasOffset: { ...canvasOffset } });
+            applyPage(shownTab === MASTER_PAGE ? node.page : shownTab);
+            const reason = splitBlockReason(node);
+            if (reason) {
+                applyPage(shownTab);
+                showCustomAlert(reason);
+                return;
+            }
+
+            recordChange(shownTab);
+
+            // The first split makes page1 a copy of the Master layout, without the branch that moves away.
+            if (isFirstSplit) {
+                allNodes.forEach(n => {
+                    n.x = n.positions.master.x;
+                    n.y = n.positions.master.y;
+                });
+            }
+            const newPage = Math.max(...pageNumbers()) + 1;
+            nodesBelow(node).forEach(moved => { moved.page = newPage; });
+            node.splitPage = newPage;
+            node.positions.copy = { x: 0, y: 0 };
+            tracedNode = null;
+            selectedNode = null;
+
+            const sourcePage = currentPage;
+            setCurrentPage(newPage);
+            pageViews.delete(sourcePage); // It changed, so it fits itself again when next opened
+            autoArrange(false);
+            fitAll();
+            refreshPrintSizes();
+        }
+
+        // Merges the current page back into the page it was split from. Its nodes keep their
+        // layout beneath the split node, unless that overlaps the nodes already there.
+        function undoSplit() {
+            if (allNodes.length === 0) return;
+            const splitNode = allNodes.find(n => n.splitPage === currentPage);
+            if (!splitNode) {
+                showCustomAlert(`${pageName(currentPage)} wasn't created by a split, so there's nothing to undo here. Open the page you want to merge back, then click Undo Split.`);
+                return;
+            }
+
+            recordChange();
+            const mergedPage = currentPage;
+            const targetPage = splitNode.page;
+            const dx = splitNode.positions.home.x - splitNode.x;
+            const dy = splitNode.positions.home.y - splitNode.y;
+            allNodes.filter(n => n.page === mergedPage).forEach(node => {
+                node.x += dx;
+                node.y += dy;
+                node.page = targetPage;
+            });
+            splitNode.splitPage = null;
+            selectedNode = null;
+
+            pageViews.delete(mergedPage);
+            pageViews.delete(targetPage);
+            applyPage(targetPage);
+            renumberPages();
+            applyPage(currentPage);
+            if (hasPages()) {
+                if (findOverlappingNodes()) autoArrange(false);
+                fitAll();
+            } else {
+                // That was the last split: only the untouched Master tab remains.
+                goToPage(MASTER_PAGE);
+            }
+            refreshPrintSizes();
+        }
+
+        function initDiagram() {
+            if (nodesArray.length === 0) return;
+            updateDropOverlay();
+
+            allTabs().forEach(page => {
+                setCurrentPage(page);
+                const hasCoordinates = nodesArray.some(n => n.x !== 0 || n.y !== 0);
+                if (!hasCoordinates) autoArrange(false);
+            });
+            setCurrentPage(MASTER_PAGE);
+            pageViews = new Map();
+            fitAll();
+            renderAll();
+
+            refreshPrintSizes();
+
+            const notices = loadNotice ? [loadNotice] : [];
+            const overlap = findOverlappingNodes();
+            if (overlap) {
+                notices.push(`Some nodes overlap at their saved positions (for example "${overlap[0].id}" and "${overlap[1].id}"), which can hide their text. Click Auto-Arrange or move them apart before exporting.`);
+            }
+            if (notices.length > 0) showCustomAlert(notices.join('\n\n'));
+        }
+
+        function findOverlappingNodes() {
+            for (let i = 0; i < nodesArray.length; i++) {
+                for (let j = i + 1; j < nodesArray.length; j++) {
+                    const a = nodesArray[i];
+                    const b = nodesArray[j];
+                    if (Math.abs(a.x - b.x) < DESC_W && a.y < nodeBottom(b) && b.y < nodeBottom(a)) return [a, b];
+                }
+            }
+            return null;
+        }
+
+        function autoArrange(doRender = true) {
+            if (nodesArray.length === 0) return;
+            if (doRender) recordChange(); // The Auto-Arrange button; internal layouts are part of another step
+
+            const rows = reduceCrossings(buildLayers());
+            assignRowPositions(rows);
+
+            // Route with generous spacing to learn how many lanes each gap needs, then set the final rows.
+            const nodeRows = rows.map(row => row.filter(e => e.node).map(e => e.node));
+            const rowHeight = row => Math.max(...row.map(rowSlotHeight));
+            let y = 0;
+            const trialY = nodeRows.map(row => {
+                const rowY = y;
+                row.forEach(n => { n.y = rowY; });
+                y += rowHeight(row) + V_GAP;
+                return rowY;
+            });
+            const { rowLaneCount, entryLaneCount } = computeConnectors();
+            y = 0;
+            nodeRows.forEach((row, r) => {
+                const lanesInGap = (rowLaneCount.get(trialY[r]) || 0) + (entryLaneCount.get(trialY[r + 1]) || 0);
+                row.forEach(n => { n.y = y; });
+                y += Math.max(V_GAP, rowHeight(row) + (lanesInGap + 1) * LANE_STEP);
+            });
+
+            if (doRender) {
+                fitAll();
+                renderAll();
+            }
+        }
+
+        // --- View & Interaction ---
+
+        document.getElementById('zoomSlider').addEventListener('input', function(e) {
+            zoomLevel = parseInt(e.target.value) / 100;
+            document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
+            renderAll();
+        });
+
+        // Scroll to Zoom logic
+        document.getElementById('canvasWrapper').addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomStep = 0.1;
+            const newZoom = Math.max(0.2, Math.min(3.0, e.deltaY > 0 ? zoomLevel - zoomStep : zoomLevel + zoomStep));
+            
+            const rect = document.getElementById('canvasWrapper').getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            // Offset logic to center zoom on mouse cursor
+            canvasOffset.x = mouseX - (mouseX - canvasOffset.x) * (newZoom / zoomLevel);
+            canvasOffset.y = mouseY - (mouseY - canvasOffset.y) * (newZoom / zoomLevel);
+            
+            zoomLevel = newZoom;
+            updateZoomControls();
+            renderAll();
+        }, { passive: false });
+
+        function updateZoomControls() {
+            const zoomPerc = Math.round(zoomLevel * 100);
+            document.getElementById('zoomSlider').value = zoomPerc;
+            document.getElementById('zoomLabel').textContent = zoomPerc + '%';
+        }
+
+        function getContentBounds() {
+            return {
+                minX: Math.min(...nodesArray.map(n => n.x)),
+                maxX: Math.max(...nodesArray.map(n => n.x)),
+                minY: Math.min(...nodesArray.map(n => n.y)),
+                maxY: Math.max(...nodesArray.map(nodeBottom))
+            };
+        }
+
+        function fitAll() {
+            if (nodesArray.length === 0) return;
+            const { minX, maxX, minY, maxY } = getContentBounds();
+
+            // Fit between the toolbar and the page tabs, so neither covers the diagram.
+            const pad = 60; // Room at the sides for a page-link triangle and label
+            const contentW = (maxX - minX) + DESC_W + pad * 2;
+            const contentH = maxY - minY;
+            const top = document.querySelector('.action-bar').getBoundingClientRect().bottom + FIT_MARGIN;
+            const availableH = Math.max(window.innerHeight - FIT_TAB_BAR_H - top, FIT_MARGIN);
+
+            const scaleX = window.innerWidth / contentW;
+            const scaleY = availableH / contentH;
+            zoomLevel = Math.min(scaleX, scaleY, 1.5);
+            
+            updateZoomControls();
+            
+            canvasOffset.x = (window.innerWidth - contentW * zoomLevel) / 2 - (minX - DESC_W/2 - pad) * zoomLevel;
+            canvasOffset.y = top + (availableH - contentH * zoomLevel) / 2 - minY * zoomLevel;
+            
+            renderAll();
+        }
+
+        document.addEventListener('mousemove', (e) => {
+            if (draggingNode) {
+                // A small wobble during a click or double-click isn't a drag, so the node stays put.
+                if (!mouseHasMoved && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < DRAG_THRESHOLD) return;
+                if (!mouseHasMoved) recordChange();
+                mouseHasMoved = true;
+                const targetSvg = svg.querySelector('g');
+                const ctm = targetSvg.getScreenCTM();
+                let newX = (e.clientX - ctm.e) / ctm.a - dragOffset.x;
+                let newY = (e.clientY - ctm.f) / ctm.d - dragOffset.y;
+                
+                const SNAP_THRESHOLD = 10;
+                activeAlignLines = { x: null, y: null };
+
+                for (let other of nodesArray) {
+                    if (other === draggingNode) continue;
+                    if (activeAlignLines.x === null && Math.abs(newX - other.x) < SNAP_THRESHOLD) {
+                        newX = other.x; activeAlignLines.x = other.x;
+                    }
+                    if (activeAlignLines.y === null && Math.abs(newY - other.y) < SNAP_THRESHOLD) {
+                        newY = other.y; activeAlignLines.y = other.y;
+                    }
+                    if (activeAlignLines.x !== null && activeAlignLines.y !== null) break;
+                }
+
+                draggingNode.x = newX;
+                draggingNode.y = newY;
+                renderAll();
+            } else if (isDraggingCanvas) {
+                canvasOffset.x = e.clientX - canvasDragStart.x;
+                canvasOffset.y = e.clientY - canvasDragStart.y;
+                renderAll();
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            // Only redraw after a real drag: replacing the node on a plain click would break double-click.
+            if (draggingNode && mouseHasMoved) {
+                activeAlignLines = { x: null, y: null };
+                renderAll();
+            } else if (draggingNode) {
+                setClickedNode(draggingNode);
+            } else if (isDraggingCanvas && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < DRAG_THRESHOLD) {
+                setClickedNode(null); // A plain click on empty canvas clears the trace or selection
+            }
+            draggingNode = null;
+            isDraggingCanvas = false;
+        });
+
+        document.getElementById('panContainer').addEventListener('mousedown', (e) => {
+            if (draggingNode) return;
+            isDraggingCanvas = true;
+            dragStart = { x: e.clientX, y: e.clientY };
+            canvasDragStart.x = e.clientX - canvasOffset.x;
+            canvasDragStart.y = e.clientY - canvasOffset.y;
+        });
+
+        // --- Exports ---
+
+        function prepareSVGForExport(svgClone) {
+            svgClone.querySelectorAll('.node-rect, .gate-path, .leaf-circle, .transfer-triangle').forEach(el => {
+                el.setAttribute('fill', 'white');
+                el.setAttribute('stroke', EXPORT_LINE_COLOR);
+                el.setAttribute('stroke-width', '2');
+            });
+            svgClone.querySelectorAll('.node-text, .gate-text, .node-potentiality, .duplicate-number, .transfer-label').forEach(el => {
+                el.setAttribute('fill', '#1f2937');
+                el.setAttribute('font-family', FONT_FAMILY);
+            });
+            svgClone.querySelectorAll('.connector-line').forEach(el => {
+                el.setAttribute('fill', 'none');
+                el.setAttribute('stroke', EXPORT_LINE_COLOR);
+                el.setAttribute('stroke-width', '2');
+            });
+            svgClone.querySelectorAll('.connector-dot').forEach(el => {
+                el.setAttribute('fill', EXPORT_LINE_COLOR);
+            });
+
+            // Exports never show a trace: its look comes only from these classes.
+            svgClone.querySelectorAll('[class*="trace-"]').forEach(el => {
+                [...el.classList].filter(name => name.startsWith('trace-')).forEach(name => el.classList.remove(name));
+            });
+        }
+
+        function getSvgData() {
+            const clone = svg.cloneNode(true);
+            clone.removeAttribute('id');
+            clone.removeAttribute('class'); // Page styling that could override the exported size
+            const g = clone.querySelector('g');
+            
+            const { minX, minY, width: w, height: h } = getExportArea(computeConnectors().paths);
+
+            g.setAttribute('transform', `translate(${EXPORT_MARGIN - minX}, ${EXPORT_MARGIN - minY}) scale(1)`);
+            // A physical size in points, so every page's text prints at the same size.
+            const printScale = tabPrintSize(currentPage) / NODE_TEXT_SIZE;
+            clone.setAttribute('width', `${w * printScale}pt`);
+            clone.setAttribute('height', `${h * printScale}pt`);
+            clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+            
+            prepareSVGForExport(clone);
+            const label = createEl('text', {
+                x: EXPORT_MARGIN, y: h - EXPORT_MARGIN, 'font-size': EXPORT_LABEL_FONT_SIZE,
+                'font-family': FONT_FAMILY, fill: '#1f2937', class: 'export-label'
+            });
+            label.textContent = exportLabel();
+            clone.appendChild(label);
+            return { xml: new XMLSerializer().serializeToString(clone), w: w, h: h };
+        }
+
+        function exportFileName(extension) {
+            return hasPages() ? `threat_tree_${pageName(currentPage).toLowerCase()}.${extension}` : `threat_tree.${extension}`;
+        }
+
+        function exportSVG() {
+            if (document.body.classList.contains('dark-mode')) {
+                showCustomAlert("SVG export is disabled in Dark Mode for MS Word compatibility.");
+                return;
+            }
+            if (allNodes.length === 0) return;
+
+            // The Master diagram and every page at once, so the pages all share the same text size.
+            const shownTab = currentPage;
+            const files = allTabs().map(page => {
+                applyPage(page);
+                renderAll();
+                return { name: exportFileName('svg'), xml: getSvgData().xml };
+            });
+            applyPage(shownTab);
+            renderAll();
+            updatePageTabs();
+
+            // Browsers can drop downloads started at the same moment, so they're spaced apart.
+            files.forEach((file, i) => {
+                setTimeout(() => {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(new Blob([file.xml], { type: 'image/svg+xml;charset=utf-8' }));
+                    link.download = file.name;
+                    link.click();
+                }, i * SVG_DOWNLOAD_SPACING_MS);
+            });
+        }
+
+        function exportPNG() {
+            const data = getSvgData();
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            const scale = 4;
+            canvas.width = data.w * scale;
+            canvas.height = data.h * scale;
+            ctx.scale(scale, scale);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, data.w, data.h);
+            
+            const img = new Image();
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0, data.w, data.h);
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = exportFileName('png');
+                link.click();
+            };
+            img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data.xml)));
+        }
+
+        // --- CSV Parsers & Generators ---
+
+        // RFC 4180: quoted fields may contain commas, line breaks and doubled quotes.
+        // A quote anywhere other than the start of a field is kept as an ordinary character.
+        function parseCSVRows(text) {
+            const rows = [];
+            let row = [];
+            let val = '';
+            let inQuotes = false;
+            const endField = () => { row.push(val); val = ''; };
+            const endRow = () => {
+                endField();
+                if (row.some(v => v.trim() !== '')) rows.push(row);
+                row = [];
+            };
+
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (inQuotes) {
+                    if (char !== '"') val += char;
+                    else if (text[i + 1] === '"') { val += '"'; i++; }
+                    else inQuotes = false;
+                } else if (char === '"' && val.trim() === '') {
+                    val = '';
+                    inQuotes = true;
+                } else if (char === ',') {
+                    endField();
+                } else if (char === '\n') {
+                    endRow();
+                } else if (char === '\r') {
+                    if (text[i + 1] !== '\n') endRow();
+                } else {
+                    val += char;
+                }
+            }
+            if (inQuotes) {
+                throw new Error('A quoted value is never closed. Check for a missing " in the file.');
+            }
+            if (val !== '' || row.length > 0) endRow();
+            return rows;
+        }
+
+        function parseCSV(text) {
+            const result = [];
+            const rows = parseCSVRows(text);
+            if (rows.length === 0) return result;
+
+            const headers = rows[0].map(h => h.trim().toLowerCase());
+            for (let i = 1; i < rows.length; i++) {
+                const values = rows[i];
+                if (values.length > headers.length) {
+                    throw new Error(`The row for "${values[0]}" has more columns than the header. If Parent_ID lists several parents, put them in quotes, e.g. "a, b".`);
+                }
+                const obj = {};
+                headers.forEach((header, index) => obj[header] = values[index] ? values[index].trim() : '');
+                result.push(obj);
+            }
+            return result;
+        }
+
+        // Nodes with the same Title, Description and Potentiality form a duplicate group. Each group gets a
+        // colour, and each group containing leaf nodes gets a number shown on those leaves, both in order
+        // of first appearance. Returns the number of groups.
+        function markDuplicates(nodes) {
+            const normalize = text => text.trim().replace(/\s+/g, ' ');
+            const groups = groupBy(nodes, n => JSON.stringify([n.title, n.description, n.potentiality].map(normalize)));
+            nodes.forEach(n => {
+                n.duplicateGroup = null;
+                n.duplicateNumber = null;
+            });
+
+            let groupCount = 0;
+            let leafGroupCount = 0;
+            groups.forEach(members => {
+                const first = members[0];
+                const isBlank = !first.title.trim() && !first.description.trim() && !first.potentiality.trim();
+                if (members.length < 2 || isBlank) return;
+
+                const leaves = members.filter(n => n.gateType === 'BASIC');
+                if (leaves.length > 0) leafGroupCount++;
+                members.forEach(n => { n.duplicateGroup = groupCount; });
+                leaves.forEach(n => { n.duplicateNumber = leafGroupCount; });
+                groupCount++;
+            });
+            return groupCount;
+        }
+
+        // X and Y are the Master tab's layout; Page_X, Page_Y and Split_X, Split_Y are the page tabs' layouts.
+        // A file saved before the Master tab existed has Page but no Page_X, and its X and Y were the page layout.
+        function readPositions(row) {
+            const point = (x, y) => ({ x: parseFloat(x) || 0, y: parseFloat(y) || 0 });
+            const isOlderSplitFile = row.page && row.page_x === undefined;
+            const master = isOlderSplitFile ? { x: 0, y: 0 } : point(row.x, row.y);
+            const home = isOlderSplitFile ? point(row.x, row.y) : point(row.page_x, row.page_y);
+            return {
+                x: master.x,
+                y: master.y,
+                shownPosition: 'master',
+                positions: { master, home, copy: point(row.split_x, row.split_y) }
+            };
+        }
+
+        // A whole page number from the Page or Split_Page column, or null if blank.
+        function parsePageNumber(value, id, column, errors) {
+            if (!value) return null;
+            if (!/^[1-9]\d*$/.test(value)) {
+                errors.push(`"${id}" has an invalid ${column}: "${value}".`);
+                return null;
+            }
+            return parseInt(value, 10);
+        }
+
+        function buildTreeFromCSV(flatData) {
+            const nodeMap = new Map();
+            const errors = [];
+
+            // First pass: Instantiate objects
+            flatData.forEach(row => {
+                if (!row.id) {
+                    errors.push(`A row has no ID (Title: "${row.title || ''}", Description: "${row.description || ''}").`);
+                    return;
+                }
+                if (nodeMap.has(row.id)) {
+                    errors.push(`Duplicate ID "${row.id}".`);
+                    return;
+                }
+                const node = {
+                    id: row.id, 
+                    parentIds: row.parent_id ? row.parent_id.split(',').map(s => s.trim()).filter(s => s) : [],
+                    gateType: (row.type || '').toUpperCase(),
+                    title: row.title || '', description: row.description || '', potentiality: row.potentiality || '',
+                    children: [], parents: [],
+                    page: parsePageNumber(row.page, row.id, 'Page', errors) ?? 1,
+                    splitPage: parsePageNumber(row.split_page, row.id, 'Split_Page', errors),
+                    ...readPositions(row)
+                };
+                nodeMap.set(row.id, node);
+            });
+
+            // Second pass: Bind DAG relations
+            const nodes = [...nodeMap.values()];
+            nodes.forEach(node => {
+                if (node.parentIds.length > MAX_PARENTS) {
+                    errors.push(`"${node.id}" has ${node.parentIds.length} parents (the limit is ${MAX_PARENTS}).`);
+                }
+                if (new Set(node.parentIds).size < node.parentIds.length) {
+                    errors.push(`"${node.id}" lists the same parent more than once.`);
+                }
+                new Set(node.parentIds).forEach(pId => {
+                    if (nodeMap.has(pId)) {
+                        nodeMap.get(pId).children.push(node);
+                        node.parents.push(nodeMap.get(pId));
+                    } else {
+                        errors.push(`"${node.id}" refers to a parent that doesn't exist: "${pId}".`);
+                    }
+                });
+            });
+
+            nodes.forEach(node => {
+                if (!NODE_TYPES.includes(node.gateType)) {
+                    errors.push(`"${node.id}" has unsupported Type "${node.gateType}" (use ${NODE_TYPES.join(', ')}).`);
+                } else if (node.gateType === 'BASIC' && node.children.length > 0) {
+                    errors.push(`"${node.id}" is BASIC but has children (use AND or OR).`);
+                }
+                measureNodeText(node);
+            });
+            const unfinishedGates = nodes.filter(n => n.gateType !== 'BASIC' && n.children.length === 0);
+
+            // Page columns: every connection must stay on one page, except at a split.
+            const splitTargets = new Set();
+            nodes.forEach(node => {
+                if (node.splitPage !== null) {
+                    if (node.children.length === 0) errors.push(`"${node.id}" has a Split_Page but no children.`);
+                    if (node.splitPage === node.page) errors.push(`"${node.id}" has a Split_Page equal to its own Page.`);
+                    if (splitTargets.has(node.splitPage)) errors.push(`More than one node splits to page ${node.splitPage}.`);
+                    splitTargets.add(node.splitPage);
+                }
+                node.children.forEach(child => {
+                    const expectedPage = node.splitPage ?? node.page;
+                    if (child.page !== expectedPage) {
+                        errors.push(`"${child.id}" is on page ${child.page}, but its parent "${node.id}" expects it on page ${expectedPage}.`);
+                    }
+                });
+                node.allChildren = node.children;
+            });
+
+            const ordered = new Set(topologicalOrder(nodes));
+            const inCycle = nodes.filter(n => !ordered.has(n));
+            if (inCycle.length > 0) {
+                errors.push(`Circular parent links involving: ${inCycle.map(n => `"${n.id}"`).join(', ')}.`);
+            }
+
+            // The diagram on screen is only replaced once the whole file is valid.
+            if (errors.length > 0) {
+                const shown = errors.slice(0, MAX_ERRORS_SHOWN);
+                if (errors.length > shown.length) shown.push(`...and ${errors.length - shown.length} more.`);
+                throw new Error(shown.join('\n'));
+            }
+            const duplicateGroupCount = markDuplicates(nodes);
+            const notices = [];
+            if (unfinishedGates.length > 0) {
+                notices.push(`These gates have no inputs yet and are drawn that way: ${unfinishedGates.map(n => `"${n.id}"`).join(', ')}.`);
+            }
+            if (duplicateGroupCount > DUPLICATE_COLORS.length) {
+                notices.push(`This file has ${duplicateGroupCount} groups of duplicated nodes but only ${DUPLICATE_COLORS.length} colours, so some groups share a colour.`);
+            }
+
+            allNodes = nodes;
+            tracedNode = null;
+            printSizes = new Map();
+            undoStack = [];
+            redoStack = [];
+            hasUnsavedChanges = false;
+            pageViews = new Map();
+            selectedNode = null;
+            setCurrentPage(MASTER_PAGE);
+            pageViews = new Map();
+            loadNotice = notices.join('\n\n');
+        }
+
+        function buildCSVText(coordinate = (value) => Math.round(value * 10) / 10) {
+            const csvField = (value) => {
+                const text = String(value);
+                return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+            };
+
+            // The page columns are only written once a diagram has been split.
+            const withPages = hasPages();
+            let csv = "ID,Parent_ID,Type,Title,Description,Potentiality,X,Y" + (withPages ? ",Page,Page_X,Page_Y,Split_Page,Split_X,Split_Y" : "") + "\n";
+            allNodes.forEach(node => {
+                const master = nodePosition(node, 'master');
+                const home = nodePosition(node, 'home');
+                const copy = nodePosition(node, 'copy');
+                const fields = [
+                    node.id, node.parentIds.join(', '), node.gateType, node.title, node.description,
+                    node.potentiality, coordinate(master.x), coordinate(master.y)
+                ];
+                if (withPages) {
+                    fields.push(node.page, coordinate(home.x), coordinate(home.y));
+                    fields.push(...(node.splitPage !== null
+                        ? [node.splitPage, coordinate(copy.x), coordinate(copy.y)]
+                        : ['', '', '']));
+                }
+                csv += fields.map(csvField).join(',') + '\n';
+            });
+            return csv;
+        }
+
+        function exportCSV() {
+            if (!nodesArray || nodesArray.length === 0) return;
+            const blob = new Blob([buildCSVText()], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "threat_tree_export.csv";
+            link.click();
+            setUnsaved(false);
+        }
+
+        // --- Setup & File I/O ---
+
+        function processFile(file) {
+            if (hasUnsavedChanges) {
+                showConfirm('Loading this file replaces the current diagram, and your unsaved changes will be lost. To keep them, click Cancel, then Save CSV.', () => readFile(file));
+            } else {
+                readFile(file);
+            }
+        }
+
+        function readFile(file) {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const flatData = parseCSV(ev.target.result);
+                    buildTreeFromCSV(flatData);
+                    sourceFileName = file.name;
+                    if (nodesArray.length === 0) throw new Error("No valid nodes found.");
+                    initDiagram();
+                } catch (err) {
+                    showCustomAlert("Invalid CSV:\n" + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (file) processFile(file);
+            event.target.value = '';
+        }
+
+        // Drag/Drop Listeners
+        const dropOverlay = document.getElementById('dropOverlay');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => document.body.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }));
+        let dragCounter = 0;
+        // The overlay doubles as the start screen, so it stays up until a diagram has loaded.
+        function updateDropOverlay() {
+            dropOverlay.classList.toggle('hidden', nodesArray.length > 0 && dragCounter === 0);
+        }
+        document.body.addEventListener('dragenter', () => { dragCounter++; updateDropOverlay(); });
+        document.body.addEventListener('dragleave', () => { dragCounter--; updateDropOverlay(); });
+        document.body.addEventListener('drop', (e) => {
+            dragCounter = 0;
+            updateDropOverlay();
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.csv')) processFile(file);
+        });
+
+        // UI toggles
+        function toggleTheme() {
+            document.body.classList.toggle('dark-mode');
+            renderAll(); // Duplicate colours differ by theme
+        }
+        function showCustomAlert(msg) { document.getElementById('customAlertMessage').innerText = msg; document.getElementById('customAlertModal').classList.remove('hidden'); }
+        function openModal(node) {
+            document.getElementById('modalTitle').innerText = node.title;
+            const p = document.getElementById('modalPotentiality');
+            if(node.potentiality) { p.innerText = "Potentiality: " + node.potentiality; p.classList.remove('hidden'); } else p.classList.add('hidden');
+            document.getElementById('modalDesc').innerText = node.description;
+            document.getElementById('modalDetails').innerText = node.details || "No further details.";
+            document.getElementById('modalType').innerText = node.gateType + " Event";
+            document.getElementById('infoModal').classList.remove('hidden');
+        }
+        function closeModal() { document.getElementById('infoModal').classList.add('hidden'); }
+        function openHelp() {
+            document.getElementById('helpModal').classList.remove('hidden');
+            document.getElementById('helpBody').scrollTop = 0;
+        }
+        function closeHelp() { document.getElementById('helpModal').classList.add('hidden'); }
+        document.addEventListener('keydown', e => {
+            const isCommand = e.ctrlKey || e.metaKey;
+            const key = e.key.toLowerCase();
+            if (isCommand && (key === 'z' || key === 'y')) {
+                e.preventDefault();
+                if (isDialogOpen() || draggingNode) return;
+                if (key === 'y' || e.shiftKey) stepHistory(redoStack, undoStack);
+                else stepHistory(undoStack, redoStack);
+                return;
+            }
+            if (e.key !== "Escape") return;
+            if (!document.getElementById('confirmModal').classList.contains('hidden')) {
+                closeConfirm();
+                return;
+            }
+            if (!document.getElementById('helpModal').classList.contains('hidden')) {
+                closeHelp();
+                return;
+            }
+            // Esc closes an open Details window first, then clears the trace or selection.
+            if (document.getElementById('infoModal').classList.contains('hidden')) setClickedNode(null);
+            else closeModal();
+        });
+
+        // --- Keep the Current Diagram Across a Refresh ---
+        // sessionStorage survives a refresh but is cleared when the tab closes, so threat data doesn't stay on the machine.
+
+        function saveSession() {
+            try {
+                sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+                    csv: nodesArray.length > 0 ? buildCSVText(value => value) : null, // Exact positions, unrounded
+                    zoomLevel,
+                    canvasOffset,
+                    isDark: document.body.classList.contains('dark-mode'),
+                    tracedNodeId: tracedNode ? tracedNode.id : null,
+                    hasUnsavedChanges,
+                    sourceFileName,
+                    currentPage,
+                    pageViews: [...pageViews]
+                }));
+            } catch (err) {
+                // Storage can be full or blocked; the page still works, it just won't restore.
+            }
+        }
+
+        function restoreSession() {
+            try {
+                const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY));
+                if (!saved) return;
+                document.body.classList.toggle('dark-mode', saved.isDark);
+                if (!saved.csv) return;
+                buildTreeFromCSV(parseCSV(saved.csv));
+                tracedNode = allNodes.find(n => n.id === saved.tracedNodeId) || null;
+                hasUnsavedChanges = Boolean(saved.hasUnsavedChanges);
+                sourceFileName = saved.sourceFileName || '';
+                setCurrentPage(saved.currentPage ?? currentPage);
+                pageViews = new Map(saved.pageViews ?? []);
+                zoomLevel = saved.zoomLevel;
+                canvasOffset = saved.canvasOffset;
+                updateZoomControls();
+                updateDropOverlay();
+                renderAll();
+                refreshPrintSizes();
+            } catch (err) {
+                // Unreadable saved data: fall back to the start screen.
+                sessionStorage.removeItem(SESSION_KEY);
+            }
+        }
+
+        window.addEventListener('pagehide', saveSession);
+        restoreSession();
+
+    </script>
+</body>
+</html>
